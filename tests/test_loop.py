@@ -32,7 +32,8 @@ def plan(*tasks: dict) -> str:
 class Harness:
     """Replaces the planner reply and the worker agent. `worker(role, objective)` returns a RoleRun (or raises)."""
 
-    def __init__(self, monkeypatch: pytest.MonkeyPatch, plans: list[str], worker=None) -> None:
+    def __init__(self, monkeypatch: pytest.MonkeyPatch, plans: list[str], worker=None, before=None) -> None:
+        self.before = before  # runs as the agent *starts*, like real agents that write files while still working
         self.plans = iter(plans)
         self.plan_prompts: list[str] = []
         self.calls: list[str] = []  # objectives, in start order
@@ -51,6 +52,8 @@ class Harness:
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
+            if self.before:
+                self.before(role, objective)
             await asyncio.sleep(0.02)
             result = self.worker(role, objective)
             if isinstance(result, Exception):
@@ -344,18 +347,17 @@ def _commits(ws, base: str) -> list[tuple[str, list[str]]]:
 
 async def test_parallel_tasks_get_separate_commits_with_only_their_own_files(tmp_path, monkeypatch):
     """Regression (found in a live run): the first task to finish used `git add -A`, so its commit swallowed the
-    sibling's files and the sibling got no commit at all."""
+    sibling's files and the sibling got no commit at all. Both files exist before either task finishes."""
     state = start(tmp_path, config=RunConfig(concurrency=2))
     ws = state["workspace"]
     ws.init_git()
 
-    def worker(role, objective):
+    def write_own_file(role, objective):
         name = objective.split("\n")[0].split()[-1]  # "a" or "b"
         (ws.work / name).mkdir(exist_ok=True)
         (ws.work / name / "f.py").write_text(name)
-        return RoleRun(PASS)
 
-    Harness(monkeypatch, [plan(t("a", writes=["a/**"]), t("b", writes=["b/**"]))], worker)
+    Harness(monkeypatch, [plan(t("a", writes=["a/**"]), t("b", writes=["b/**"]))], before=write_own_file)
     base = graph_mod.git(ws.work, "rev-parse", "HEAD")
     await run({**state, "base_commit": base})
     commits = _commits(ws, base)
