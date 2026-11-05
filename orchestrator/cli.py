@@ -171,7 +171,7 @@ def run(project: str, workspaces_root: Path, concurrency: int, approve_plan: boo
     run_id = uuid4().hex[:8]
     base = prepare_workspace(workspace, run_id)
     click.echo(f"Starting run {run_id!r} for project {project!r}: {request}")
-    config = RunConfig(concurrency=concurrency, plan_approval=approve_plan, final_review=review_result)
+    config = RunConfig(concurrency=concurrency, plan_approval=approve_plan, final_review=review_result, require_plan=True)
     state = _make_state(workspace, run_id, TaskLog(run_id=run_id, request=request, tasks=[]), config, approve_plan, base)
     if review_result:
         async def review(payload: dict) -> dict:
@@ -207,7 +207,7 @@ def resume(project: str, workspaces_root: Path, run_id: str, guidance: str | Non
 
     click.echo(f"Resuming run {run_id!r} for project {project!r}.")
     meta = read_meta(workspace, run_id) or {}
-    state = _make_state(workspace, run_id, task_log, RunConfig(concurrency=concurrency), False, meta.get("base_commit"))
+    state = _make_state(workspace, run_id, task_log, RunConfig(concurrency=concurrency, require_plan=True), False, meta.get("base_commit"))
     state["resume_note"] = resume_note(task_log, guidance, meta.get("reason"))
     _events(state).emit("run_resumed", run_id=run_id, guidance=guidance or "")
     result = asyncio.run(run_graph(state))

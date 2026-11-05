@@ -229,6 +229,7 @@ class TeamContext:
         self.role_runs: dict[str, int] = {}
         self.dispatches = 0
         self.todos: list[dict[str, Any]] = []
+        self.plan_refusals = 0
         self.said: set[str] = set()
         self.approved = False
         self.rejected = False
@@ -414,6 +415,16 @@ class TeamControl(AgentMiddleware[Any, Any, Any]):
         if role is None:
             names = ", ".join(load_role(r).name for r in SPECIALISTS)
             return error_message((call["id"] or ""), f"Unknown sub-agent {args.get('subagent_type')!r}. Use one of: {names}.")
+        if ctx.cfg.require_plan and not ctx.todos:
+            if ctx.plan_refusals < ctx.cfg.max_plan_refusals:
+                ctx.plan_refusals += 1
+                ctx.emit("plan_required", message="The Project Manager tried to delegate before writing a plan; asked it to plan first.")
+                return error_message(
+                    (call["id"] or ""),
+                    "Plan first. Call `write_todos` now with one item per piece of work (each naming the specialist), "
+                    "then delegate each item with `task`.",
+                )
+            ctx.emit("plan_warning", message="The Project Manager delegated without writing a plan.")
         if ctx.dispatches >= ctx.cfg.max_total_dispatches:
             ctx.emit("guardrail_hit", kind="dispatch_cap", reason=f"limit of {ctx.cfg.max_total_dispatches} delegations")
             return error_message(

@@ -22,6 +22,11 @@ class RunConfig:
     # If the Project Manager ends its turn without having delegated anything (a small model may "finish" the work in
     # words), ask it once to delegate. It is a nudge, not a loop: the Project Manager still decides everything.
     max_nudges: int = 1
+    # A deep agent plans before it acts. If the Project Manager tries to delegate before it has written a to-do list with
+    # `write_todos`, the delegation is refused and it is told to plan first (at most `max_plan_refusals` times, then it
+    # is let through with a warning). The API and the CLI turn this on.
+    require_plan: bool = False
+    max_plan_refusals: int = 2
     # Before the zip is built, pause and ask the person whether anything should change. If so, the Project Manager gets
     # their note, does the extra work, and the person is asked again (at most this many times).
     final_review: bool = False  # the API turns this on by default

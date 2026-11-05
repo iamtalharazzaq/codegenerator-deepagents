@@ -146,7 +146,9 @@ def create_app(
         return any(h.active and h.workspace.path.name == project for h in handles.values())
 
     def run_config(concurrency: int | None, plan_approval: bool, final_review: bool) -> RunConfig:
-        return RunConfig(concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval, final_review=final_review)
+        return RunConfig(
+            concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval, final_review=final_review, require_plan=True
+        )
 
     async def execute(handle: RunHandle, state: OrchestratorState) -> None:
         sandbox = state.get("sandbox_client")

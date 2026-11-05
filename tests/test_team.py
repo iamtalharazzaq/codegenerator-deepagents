@@ -510,3 +510,50 @@ async def test_no_review_for_a_run_that_did_not_pass(tmp_path):
     script = [AIMessage(content="Could not.\n---\nstatus: fail\nreason: broken\n---")]
     _, _, result = await run(tmp_path, script, cfg=RunConfig(final_review=True, max_nudges=0), review=review)
     assert result["status"] == "escalated"
+
+
+# ---------------------------------------------------------------- plan first
+
+
+async def test_delegating_before_planning_is_refused_and_the_plan_comes_first(tmp_path):
+    """Seen with the real 9B model: it skipped write_todos and went straight to delegating, so there was no plan."""
+    seen: list[str] = []
+
+    class Spy(ScriptedModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            seen.extend(str(m.content) for m in messages if isinstance(m, ToolMessage))
+            return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+    script = [
+        delegate("backend-developer", "Create a/x.py.\nWRITES: a/**", "k0"),  # no plan yet: refused
+        calls(tc("write_todos", {"todos": [{"content": "Backend Developer: create a/x.py", "status": "in_progress"}]})),
+        delegate("backend-developer", "Create a/x.py.\nWRITES: a/**", "k1"),
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),
+        AIMessage(content=PASS),
+        AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
+    ]
+    ws, events, result = await run(tmp_path, script, cfg=RunConfig(require_plan=True), model=Spy(messages=iter(script)))
+    assert result["status"] == "passed" and (ws.work / "a" / "x.py").exists()
+    order = types(events)
+    assert order.count("plan_required") == 1 and order.index("plan_required") < order.index("todos_updated") < order.index("task_started")
+    assert any(m.startswith("Plan first.") for m in seen)  # the Project Manager was told what to do
+    assert len(result["task_log"].tasks) == 1  # the refused delegation was not counted as work
+
+
+async def test_a_project_manager_that_will_not_plan_is_let_through_with_a_warning(tmp_path):
+    script = [
+        delegate("backend-developer", "One.\nWRITES: a/**", "k0"),
+        delegate("backend-developer", "One.\nWRITES: a/**", "k1"),
+        delegate("backend-developer", "One.\nWRITES: a/**", "k2"),  # third try: allowed
+        AIMessage(content=PASS),
+        AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
+    ]
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(require_plan=True, max_plan_refusals=2))
+    order = types(events)
+    assert order.count("plan_required") == 2 and "plan_warning" in order and result["status"] == "passed"
+
+
+async def test_planning_is_not_enforced_when_switched_off(tmp_path):
+    script = [delegate("backend-developer", "One.\nWRITES: a/**"), AIMessage(content=PASS), AIMessage(content=PASS)]
+    _, events, _ = await run(tmp_path, script, cfg=RunConfig(require_plan=False))
+    assert "plan_required" not in types(events)
