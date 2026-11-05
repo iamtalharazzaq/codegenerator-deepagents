@@ -1,0 +1,72 @@
+import json
+from pathlib import Path
+
+from agent.tools.workspace import Workspace, git
+from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
+
+from orchestrator.events import EventLog
+from orchestrator.runner import (
+    prepare_workspace,
+    read_meta,
+    reopen_for_resume,
+    run_graph,
+    write_meta,
+)
+from orchestrator.task import Task, TaskLog
+
+
+class EmptyModel(GenericFakeChatModel):
+    """Raises as soon as the planner asks it anything (its script is empty)."""
+
+    def bind_tools(self, tools, **kwargs):
+        return self
+
+
+def mk(status: str, **kw) -> Task:
+    return Task(id=kw.pop("id", "t1"), role="qa_engineer", objective="o", inputs=(), done_condition="d", status=status, **kw)
+
+
+def test_prepare_workspace_creates_a_repo_and_a_run_branch(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1")
+    base = prepare_workspace(ws, "r1")
+    assert base and git(ws.work, "branch", "--show-current") == "run/r1"
+
+
+def test_meta_round_trips_and_merges(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1")
+    ws.create()
+    assert read_meta(ws, "r1") is None
+    write_meta(ws, "r1", status="running", request="x")
+    write_meta(ws, "r1", status="passed")
+    meta = read_meta(ws, "r1")
+    assert meta["status"] == "passed" and meta["request"] == "x" and meta["project"] == "p1"
+
+
+def test_resume_gives_an_escalated_task_a_fresh_budget_and_unblocks_dependents():
+    log = TaskLog("r1", "x", [mk("escalated", id="a", attempt=2, reason="boom", reasons=["boom", "boom"]),
+                              mk("blocked", id="b", reason="depends on a"), mk("pass", id="c")])
+    assert reopen_for_resume(log, "use pytest -x") == "plan"
+    a, b, c = log.tasks
+    assert (a.status, a.attempt, a.reasons) == ("fail", 0, [])
+    assert (b.status, b.reason, c.status) == ("pending", "", "pass")
+    assert "boom" in log.last_failure and "use pytest -x" in log.last_failure
+
+
+def test_resuming_an_interrupted_run_goes_straight_back_to_work():
+    log = TaskLog("r1", "x", [mk("in_progress", id="a"), mk("pending", id="b")])
+    assert reopen_for_resume(log) == "act"
+    assert log.tasks[0].status == "pending"
+
+
+async def test_an_unexpected_crash_still_ends_the_run_with_an_event(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1")
+    ws.create()
+    events = EventLog(tmp_path / "e.jsonl")
+    # The model has nothing to say, so the graph raises on its first call.
+    state = {"request": "x", "workspace": ws, "run_id": "r1", "model": EmptyModel(messages=iter([])), "last_failure": None,
+             "task_log": TaskLog("r1", "x", []), "events": events}
+    await run_graph(state)  # must not raise
+    last = events.since(0)[-1]
+    assert last["type"] == "run_finished" and last["status"] == "error"
+    assert read_meta(ws, "r1")["status"] == "error"
+    assert json.loads((tmp_path / "e.jsonl").read_text().splitlines()[-1])["status"] == "error"
