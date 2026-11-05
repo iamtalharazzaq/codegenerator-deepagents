@@ -462,8 +462,8 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
         f"Done when: {task.done_condition}\n\n"
         "Do the work with your tools. Then reply with a short summary of what you did. Your reply is recorded "
         "automatically: do not write it to a file.\n"
-        "The LAST lines of your reply must be exactly this, with the dashes, not inside a code block "
-        "(status is pass only if the done condition is met):\n"
+        "The LAST lines of your reply must be exactly this, with BOTH dash lines (the opening and the closing one), "
+        "not inside a code block (status is pass only if the done condition is met):\n"
         f"{STATUS_BLOCK_FORMAT}"
     )
     client = state.get("sandbox_client")

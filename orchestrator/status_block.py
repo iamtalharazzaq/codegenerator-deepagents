@@ -34,6 +34,11 @@ _FENCED_END_RE = re.compile(
 )
 
 
+# Another slip seen with the real model: the opening `---`, `status:` and `reason:` are there but the closing `---` is
+# forgotten. Accepted only when it is the very last thing in the reply.
+_UNCLOSED_END_RE = re.compile(r"(?:^|\n)---\nstatus:\s*(pass|fail)\s*\nreason:\s*([^\n]+?)\s*\Z")
+
+
 @dataclass(frozen=True)
 class StatusResult:
     status: Literal["pass", "fail"]
@@ -49,6 +54,9 @@ def parse_status(text: str) -> StatusResult:
     fenced = _FENCED_END_RE.search(text)
     if fenced is not None:
         return StatusResult(fenced.group(1), fenced.group(2))  # type: ignore[arg-type]
+    unclosed = _UNCLOSED_END_RE.search(text)
+    if unclosed is not None:
+        return StatusResult(unclosed.group(1), unclosed.group(2))  # type: ignore[arg-type]
     matches = list(_STATUS_BLOCK_RE.finditer(text))
     if not matches:
         return StatusResult("fail", "no status block found in the artifact")

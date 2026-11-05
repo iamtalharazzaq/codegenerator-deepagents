@@ -39,3 +39,19 @@ def test_a_fenced_block_that_is_not_the_last_thing_is_not_trusted():
 def test_no_block_and_prose_claims_still_fail():
     assert parse_status("All done, status: pass!").status == "fail"
     assert parse_status("```\nstatus: pass\n```").status == "fail"  # no reason line: not a block
+
+
+def test_a_block_missing_only_its_closing_dashes_at_the_very_end_is_accepted():
+    """Seen with the real 9B model on two attempts in a row: `---`, status, reason, and no closing `---`."""
+    text = "All 6 tests pass.\n\n---\nstatus: pass\nreason: All 6 tests pass successfully"
+    assert parse_status(text) == StatusResult("pass", "All 6 tests pass successfully")
+    assert parse_status("x\n---\nstatus: fail\nreason: broke\n").status == "fail"
+
+
+def test_an_unclosed_block_followed_by_more_text_is_not_trusted():
+    assert parse_status("---\nstatus: pass\nreason: ok\nand then I kept going\nwith more lines").status == "fail"
+
+
+def test_a_stale_complete_block_earlier_does_not_beat_a_later_trailing_one():
+    text = "---\nstatus: pass\nreason: first try\n---\nThen I changed my mind.\n---\nstatus: fail\nreason: really broken"
+    assert parse_status(text) == StatusResult("fail", "really broken")
