@@ -116,7 +116,9 @@ class DemoModel(BaseChatModel):
 
     def _project_manager(self, messages: list[BaseMessage]) -> AIMessage:
         wrote_todos = 0
+        change_asked = any(isinstance(m, HumanMessage) and "asks for changes" in str(m.content) for m in messages)
         asked: dict[str, str] = {}
+        change_done = False
         results: list[tuple[str, bool]] = []  # (specialist, passed) in the order the results arrived
         for m in messages:
             if isinstance(m, AIMessage):
@@ -127,10 +129,19 @@ class DemoModel(BaseChatModel):
                         asked[c["id"] or ""] = c["args"]["subagent_type"]
             elif isinstance(m, ToolMessage) and m.tool_call_id in asked:
                 results.append((asked[m.tool_call_id], parse_status(str(m.content)).status == "pass"))
+                if "Apply the requested changes" in " ".join(
+                    str(c["args"].get("description", "")) for a in messages if isinstance(a, AIMessage) for c in a.tool_calls
+                    if c["name"] == "task" and c["id"] == m.tool_call_id
+                ):
+                    change_done = True
 
         def count(name: str) -> int:
             return sum(1 for n, _ in results if n == name)
 
+        if change_asked:  # the person asked for changes after the first finish: one more task, then report again
+            if not change_done:
+                return AIMessage(content="", tool_calls=[_task("backend_developer", "Apply the requested changes.", "backend/**")])
+            return AIMessage(content="The requested changes are made and checked.\n---\nstatus: pass\nreason: changes applied\n---")
         if wrote_todos == 0:
             return AIMessage(content="", tool_calls=[_todos(FIRST_TODOS)])  # type: ignore[list-item]
         if count("code-analyst") == 0:

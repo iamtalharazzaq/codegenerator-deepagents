@@ -113,6 +113,14 @@ NUDGE = (
 
 Status = Literal["passed", "escalated", "stopped"]
 ApproveFn = Callable[[dict[str, Any]], Awaitable[bool]]
+# The person's decision on the finished work: {"accept": bool, "changes": str}.
+ReviewFn = Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]
+
+REVIEW_CHANGES = (
+    "The person reviewed the finished work and asks for changes:\n{changes}\n\n"
+    "Delegate whatever work is needed to make those changes (include the WRITES line), read the results, then report "
+    "again with a short summary and a final status block."
+)
 
 
 class OrchestratorState(TypedDict):
@@ -125,6 +133,7 @@ class OrchestratorState(TypedDict):
     config: NotRequired[RunConfig]
     events: NotRequired[EventLog | None]
     approve: NotRequired[ApproveFn | None]
+    review: NotRequired[ReviewFn | None]
     base_commit: NotRequired[str | None]
     resume_note: NotRequired[str | None]
     status: NotRequired[Status]
@@ -210,6 +219,7 @@ class TeamContext:
         self.run_id = state["run_id"]
         self.events = state.get("events")
         self.approve = state.get("approve")
+        self.review = state.get("review")
         self.log = state["task_log"]
         self.tasks: list[Task] = self.log.tasks  # delegations so far (earlier runs of a resumed run included)
         self.by_id: dict[str, Task] = {t.id: t for t in self.tasks}
@@ -251,6 +261,31 @@ class TeamContext:
         self.emit("plan_approved" if ok else "plan_rejected")
         self.approved, self.rejected = ok, not ok
         return ok
+
+    def changed_files(self) -> list[str]:
+        """Files this run added or changed, for the review screen."""
+        ws, base = self.workspace, self.state.get("base_commit")
+        if not (ws.work / ".git").exists():
+            return []
+        self.commit_rest()
+        out = git(ws.work, "diff", "--name-only", f"{base}..HEAD", check=False) if base else git(ws.work, "ls-files", check=False)
+        return [line for line in out.splitlines() if line][:200]
+
+    def would_pass(self, final_text: str) -> bool:
+        verdict = parse_status(final_text) if final_text else None
+        return bool(verdict and verdict.status == "pass" and "no status block" not in verdict.reason
+                    and not self.rejected and any(t.status == "pass" for t in self.tasks))
+
+    async def ask_review(self, final_text: str, round_no: int) -> dict[str, Any]:
+        """Pause before the zip is built and ask the person whether anything should change."""
+        assert self.review is not None
+        self.emit("review_requested", round=round_no, summary=strip_status_block(final_text)[:1500], files=self.changed_files())
+        decision = await self.review({"round": round_no})
+        if decision.get("accept"):
+            self.emit("review_accepted", round=round_no)
+        else:
+            self.emit("review_changes_requested", round=round_no, text=str(decision.get("changes", ""))[:2000])
+        return decision
 
     def commit_task(self, task: Task) -> None:
         """Commit what this delegation wrote: only its declared paths, so parallel tasks get separate commits."""
@@ -596,20 +631,28 @@ async def run_team(state: OrchestratorState) -> OrchestratorState:
     ctx.emit("plan_started")
     agent = build_team(ctx)
     final_text, error_reason = "", None
+    async def invoke(messages: list[Any]) -> Any:
+        return await agent.ainvoke({"messages": messages}, config={"recursion_limit": ctx.cfg.max_pm_steps})
+
     async def drive() -> str:
-        result = await agent.ainvoke(
-            {"messages": [{"role": "user", "content": first_message(state)}]},
-            config={"recursion_limit": ctx.cfg.max_pm_steps},
-        )
+        result = await invoke([{"role": "user", "content": first_message(state)}])
         for _ in range(ctx.cfg.max_nudges):
             if ctx.dispatches > 0 or ctx.rejected:
                 break
             ctx.emit("pm_nudged", message="The Project Manager ended without delegating anything; asking it to delegate.")
-            result = await agent.ainvoke(
-                {"messages": [*result["messages"], HumanMessage(content=NUDGE)]},
-                config={"recursion_limit": ctx.cfg.max_pm_steps},
-            )
-        return result_text(result["messages"][-1])
+            result = await invoke([*result["messages"], HumanMessage(content=NUDGE)])
+        final = result_text(result["messages"][-1])
+        # Final review: before anything is delivered, ask whether the person wants changes.
+        for round_no in range(1, ctx.cfg.max_review_rounds + 1):
+            if not (ctx.cfg.final_review and ctx.review is not None and ctx.would_pass(final)):
+                break
+            decision = await ctx.ask_review(final, round_no)
+            if decision.get("accept"):
+                break
+            changes = str(decision.get("changes", "")).strip() or "Please check the work again and improve it."
+            result = await invoke([*result["messages"], HumanMessage(content=REVIEW_CHANGES.format(changes=changes))])
+            final = result_text(result["messages"][-1])
+        return final
 
     try:
         final_text = await asyncio.wait_for(drive(), ctx.cfg.run_timeout_s)

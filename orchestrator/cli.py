@@ -96,6 +96,10 @@ def _print_event(event: Event) -> None:
         line = f"{event['verdict']:5}  {task['role']}: {task['reason']}"
     elif kind == "guardrail_hit":
         line = f"guardrail {event['kind']}: {event.get('reason', '')}"
+    elif kind == "review_requested":
+        line = f"review: {len(event['files'])} file(s) changed. Waiting for your decision."
+    elif kind == "review_changes_requested":
+        line = f"changes requested: {event['text']}"
     elif kind == "run_finished":
         line = f"finished: {event['status']} ({event['message']})"
     if line:
@@ -146,6 +150,7 @@ _WORKSPACES = click.option(
 _PROJECT = click.option("--project", required=True, help="Project id (the workspace's name under --workspaces-root).")
 _CONCURRENCY = click.option("--concurrency", default=1, show_default=True, help="Tasks to run at once.")
 _APPROVE = click.option("--approve-plan", is_flag=True, help="Ask before any agent starts, showing the plan.")
+_REVIEW = click.option("--review", "review_result", is_flag=True, help="Ask before the zip is built whether anything should change.")
 
 
 @click.group()
@@ -158,15 +163,23 @@ def cli() -> None:
 @_WORKSPACES
 @_CONCURRENCY
 @_APPROVE
+@_REVIEW
 @click.argument("request")
-def run(project: str, workspaces_root: Path, concurrency: int, approve_plan: bool, request: str) -> None:
+def run(project: str, workspaces_root: Path, concurrency: int, approve_plan: bool, review_result: bool, request: str) -> None:
     """Start a fresh orchestration run for REQUEST."""
     workspace = Workspace(Path(workspaces_root), project)
     run_id = uuid4().hex[:8]
     base = prepare_workspace(workspace, run_id)
     click.echo(f"Starting run {run_id!r} for project {project!r}: {request}")
-    config = RunConfig(concurrency=concurrency, plan_approval=approve_plan)
+    config = RunConfig(concurrency=concurrency, plan_approval=approve_plan, final_review=review_result)
     state = _make_state(workspace, run_id, TaskLog(run_id=run_id, request=request, tasks=[]), config, approve_plan, base)
+    if review_result:
+        async def review(payload: dict) -> dict:
+            if await asyncio.to_thread(click.confirm, "The work is finished. Deliver it as it is?", default=True):
+                return {"accept": True, "changes": ""}
+            return {"accept": False, "changes": await asyncio.to_thread(click.prompt, "What should change?")}
+
+        state["review"] = review
     _events(state).emit("run_started", run_id=run_id, project=project, request=request)
     write_meta(workspace, run_id, project=project, request=request, status="running")
     result = asyncio.run(run_graph(state))

@@ -39,7 +39,7 @@ def delegate(role: str, description: str, id_: str = "k1") -> AIMessage:
     return calls(tc("task", {"description": description, "subagent_type": role}, id_))
 
 
-async def run(tmp_path: Path, script: list, *, cfg: RunConfig | None = None, approve=None, note=None, model=None, git_repo=True):
+async def run(tmp_path: Path, script: list, *, cfg: RunConfig | None = None, approve=None, review=None, note=None, model=None, git_repo=True):
     ws = Workspace(tmp_path, "p1")
     ws.create()
     if git_repo:
@@ -49,7 +49,7 @@ async def run(tmp_path: Path, script: list, *, cfg: RunConfig | None = None, app
 
     state: dict[str, Any] = {
         "request": "build it", "workspace": ws, "run_id": "r1", "model": model or ScriptedModel(messages=iter(script)),
-        "task_log": TaskLog("r1", "build it", []), "events": events, "config": cfg or RunConfig(), "approve": approve,
+        "task_log": TaskLog("r1", "build it", []), "events": events, "config": cfg or RunConfig(), "approve": approve, "review": review,
         "base_commit": git(ws.work, "rev-parse", "HEAD") if git_repo else None, "resume_note": note,
     }
     result = await run_team(state)  # type: ignore[arg-type]
@@ -413,3 +413,100 @@ async def test_no_nudge_when_the_work_was_delegated(tmp_path):
     script = [delegate("backend-developer", "Do it.\nWRITES: a/**"), AIMessage(content=PASS), AIMessage(content=PASS)]
     _, events, _ = await run(tmp_path, script)
     assert "pm_nudged" not in types(events)
+
+
+# ---------------------------------------------------------------- the final review
+
+
+def two_step_script() -> list:
+    return [
+        delegate("backend-developer", "Create a/x.py.\nWRITES: a/**", "k1"),
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),
+        AIMessage(content=PASS),
+        AIMessage(content="Built a/x.py.\n---\nstatus: pass\nreason: all passed\n---"),
+    ]
+
+
+async def test_the_zip_is_built_only_after_the_person_accepts(tmp_path):
+    asked: list[dict] = []
+    zip_path = tmp_path / "p1" / "runs" / "r1" / "delivery.zip"
+
+    async def review(payload):
+        asked.append({"zip_existed": zip_path.exists(), **payload})
+        return {"accept": True, "changes": ""}
+
+    ws, events, result = await run(tmp_path, two_step_script(), cfg=RunConfig(final_review=True), review=review)
+    assert result["status"] == "passed" and asked == [{"zip_existed": False, "round": 1}] and zip_path.exists()
+    requested = next(e for e in events.since(0) if e["type"] == "review_requested")
+    assert requested["files"] == ["a/x.py"] and requested["summary"] == "Built a/x.py."  # the status block is not shown
+    order = types(events)
+    assert order.index("review_requested") < order.index("review_accepted") < order.index("delivery_ready")
+
+
+async def test_asked_for_changes_the_project_manager_gets_the_note_does_the_work_and_is_reviewed_again(tmp_path):
+    seen: list[str] = []
+
+    class Spy(ScriptedModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            seen.extend(str(m.content) for m in messages if isinstance(m, HumanMessage))
+            return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+    script = [
+        *two_step_script(),
+        delegate("backend-developer", "Create b/y.py.\nWRITES: b/**", "k2"),
+        calls(tc("write_file", {"file_path": "/b/y.py", "content": "2"}, "w2")),
+        AIMessage(content=PASS),
+        AIMessage(content="Added b/y.py too.\n---\nstatus: pass\nreason: changed\n---"),
+    ]
+    decisions = iter([{"accept": False, "changes": "also add b/y.py"}, {"accept": True, "changes": ""}])
+
+    async def review(payload):
+        return next(decisions)
+
+    ws, events, result = await run(tmp_path, script, cfg=RunConfig(final_review=True), review=review, model=Spy(messages=iter(script)))
+    assert result["status"] == "passed"
+    assert any("asks for changes" in m and "also add b/y.py" in m for m in seen)  # the Project Manager received the note
+    rounds = [e["round"] for e in events.since(0) if e["type"] == "review_requested"]
+    assert rounds == [1, 2]
+    z = zipfile.ZipFile(tmp_path / "p1" / "runs" / "r1" / "delivery.zip")
+    assert {"a/x.py", "b/y.py"} <= set(z.namelist())  # the extra work is in what was delivered
+    assert "also add b/y.py" in [e["text"] for e in events.since(0) if e["type"] == "review_changes_requested"]
+
+
+async def test_if_the_changes_cannot_be_made_the_run_fails_instead_of_asking_again(tmp_path):
+    script = [*two_step_script(), AIMessage(content="I could not do that.\n---\nstatus: fail\nreason: not possible\n---")]
+
+    async def review(payload):
+        return {"accept": False, "changes": "do the impossible"}
+
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(final_review=True), review=review)
+    assert (result["status"], result["end_reason"]) == ("escalated", "pm_failed")
+    assert types(events).count("review_requested") == 1 and "delivery_ready" not in types(events)
+
+
+async def test_the_person_is_asked_at_most_max_review_rounds_times(tmp_path):
+    script = [
+        *two_step_script(),
+        AIMessage(content="Tweaked.\n---\nstatus: pass\nreason: ok\n---"),
+    ]
+
+    async def review(payload):
+        return {"accept": False, "changes": "again"}
+
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(final_review=True, max_review_rounds=1), review=review)
+    assert types(events).count("review_requested") == 1 and result["status"] == "passed"  # no endless loop
+
+
+@pytest.mark.parametrize("cfg_kwargs", [{"final_review": False}, {"final_review": True}])
+async def test_no_review_when_it_is_switched_off_or_nobody_can_answer(tmp_path, cfg_kwargs):
+    _, events, result = await run(tmp_path, two_step_script(), cfg=RunConfig(**cfg_kwargs), review=None)
+    assert result["status"] == "passed" and "review_requested" not in types(events)
+
+
+async def test_no_review_for_a_run_that_did_not_pass(tmp_path):
+    async def review(payload):
+        raise AssertionError("a failed run must not ask for a review")
+
+    script = [AIMessage(content="Could not.\n---\nstatus: fail\nreason: broken\n---")]
+    _, _, result = await run(tmp_path, script, cfg=RunConfig(final_review=True, max_nudges=0), review=review)
+    assert result["status"] == "escalated"

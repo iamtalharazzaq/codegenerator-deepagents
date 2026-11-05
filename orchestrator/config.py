@@ -22,5 +22,9 @@ class RunConfig:
     # If the Project Manager ends its turn without having delegated anything (a small model may "finish" the work in
     # words), ask it once to delegate. It is a nudge, not a loop: the Project Manager still decides everything.
     max_nudges: int = 1
+    # Before the zip is built, pause and ask the person whether anything should change. If so, the Project Manager gets
+    # their note, does the extra work, and the person is asked again (at most this many times).
+    final_review: bool = False  # the API turns this on by default
+    max_review_rounds: int = 5
     # Hold the first delegation until the person approves the plan (the API turns this on by default).
     plan_approval: bool = False

@@ -42,7 +42,7 @@ async def events_of(client: httpx.AsyncClient, run_id: str, headers: dict | None
 
 async def test_demo_run_recovers_after_one_qa_failure_and_delivers_a_zip(tmp_path):
     async with client_for(make_app(tmp_path, concurrency=2)) as c:
-        r = await c.post("/api/runs", json={"request": "Add password reset", "plan_approval": False})
+        r = await c.post("/api/runs", json={"request": "Add password reset", "plan_approval": False, "final_review": False})
         assert r.status_code == 201
         run_id = r.json()["run_id"]
         info = await wait_done(c, run_id)
@@ -67,7 +67,7 @@ async def test_demo_run_recovers_after_one_qa_failure_and_delivers_a_zip(tmp_pat
 
 async def test_events_replay_from_last_event_id(tmp_path):
     async with client_for(make_app(tmp_path)) as c:
-        run_id = (await c.post("/api/runs", json={"request": "x", "plan_approval": False})).json()["run_id"]
+        run_id = (await c.post("/api/runs", json={"request": "x", "plan_approval": False, "final_review": False})).json()["run_id"]
         await wait_done(c, run_id)
         everything = await events_of(c, run_id)
         tail = await events_of(c, run_id, {"Last-Event-ID": str(everything[3]["seq"])})
@@ -76,7 +76,7 @@ async def test_events_replay_from_last_event_id(tmp_path):
 
 async def test_plan_approval_blocks_until_approved(tmp_path):
     async with client_for(make_app(tmp_path)) as c:
-        run_id = (await c.post("/api/runs", json={"request": "x"})).json()["run_id"]
+        run_id = (await c.post("/api/runs", json={"request": "x", "final_review": False})).json()["run_id"]
         for _ in range(100):
             await asyncio.sleep(0.05)
             r = await c.post(f"/api/runs/{run_id}/approve", json={"approved": True})
@@ -89,7 +89,7 @@ async def test_plan_approval_blocks_until_approved(tmp_path):
 
 async def test_rejecting_the_plan_stops_the_run_with_nothing_started(tmp_path):
     async with client_for(make_app(tmp_path)) as c:
-        run_id = (await c.post("/api/runs", json={"request": "x"})).json()["run_id"]
+        run_id = (await c.post("/api/runs", json={"request": "x", "final_review": False})).json()["run_id"]
         for _ in range(100):
             await asyncio.sleep(0.05)
             if (await c.post(f"/api/runs/{run_id}/approve", json={"approved": False})).status_code == 200:
@@ -100,7 +100,7 @@ async def test_rejecting_the_plan_stops_the_run_with_nothing_started(tmp_path):
 
 async def test_escalation_offers_resume_and_a_labelled_partial_zip(tmp_path):
     async with client_for(make_app(tmp_path, scenario="escalate")) as c:
-        run_id = (await c.post("/api/runs", json={"request": "x", "plan_approval": False})).json()["run_id"]
+        run_id = (await c.post("/api/runs", json={"request": "x", "plan_approval": False, "final_review": False})).json()["run_id"]
         info = await wait_done(c, run_id)
         assert info["meta"]["status"] == "escalated" and not info["has_zip"]
         assert (await c.get(f"/api/runs/{run_id}/delivery.zip")).status_code == 409  # not offered by default
@@ -126,7 +126,7 @@ async def test_one_run_at_a_time_per_project_and_input_validation(tmp_path):
         assert (await c.post("/api/runs", json={"request": ""})).status_code == 422
         await c.post("/api/runs", json={"request": "a", "project": "shared"})  # waits for approval, so it stays active
         assert (await c.post("/api/runs", json={"request": "b", "project": "shared"})).status_code == 409
-        other = await c.post("/api/runs", json={"request": "c"})  # a new project: no conflict
+        other = await c.post("/api/runs", json={"request": "c", "final_review": False})  # a new project: no conflict
         assert other.status_code == 201
         assert (await c.get("/api/runs/zzzzzzzz")).status_code == 404
         assert (await c.get("/api/runs/00000000/artifacts/../../x")).status_code in (404, 422)
@@ -134,7 +134,7 @@ async def test_one_run_at_a_time_per_project_and_input_validation(tmp_path):
 
 async def test_list_and_artifacts_and_cancel(tmp_path):
     async with client_for(make_app(tmp_path)) as c:
-        run_id = (await c.post("/api/runs", json={"request": "list me"})).json()["run_id"]
+        run_id = (await c.post("/api/runs", json={"request": "list me", "final_review": False})).json()["run_id"]
         rows = (await c.get("/api/runs")).json()
         assert rows[0]["run_id"] == run_id and rows[0]["request"] == "list me"
         assert (await c.post(f"/api/runs/{run_id}/cancel")).status_code == 200
@@ -222,11 +222,11 @@ async def test_qa_runs_its_tests_in_the_sandbox_and_its_verdict_follows_the_real
 async def test_every_run_gets_its_own_project_so_a_zip_holds_only_that_run(tmp_path):
     """Found on a real run: runs shared one project, so a new request's zip also held every earlier run's files."""
     async with client_for(make_app(tmp_path)) as c:
-        first = (await c.post("/api/runs", json={"request": "Make a calculator", "plan_approval": False})).json()
+        first = (await c.post("/api/runs", json={"request": "Make a calculator", "plan_approval": False, "final_review": False})).json()
         await wait_done(c, first["run_id"])
         # an old file from a previous run sits in the first project; the next run must not see it
         (tmp_path / first["project"] / "work" / "old_frontend.js").write_text("// from an earlier run\n")
-        second = (await c.post("/api/runs", json={"request": "Create a calculator in python only", "plan_approval": False})).json()
+        second = (await c.post("/api/runs", json={"request": "Create a calculator in python only", "plan_approval": False, "final_review": False})).json()
         await wait_done(c, second["run_id"])
         assert first["project"] != second["project"]
         assert second["project"].startswith("create-a-calculator-in-") and second["project"].endswith(second["run_id"])
@@ -238,10 +238,10 @@ async def test_every_run_gets_its_own_project_so_a_zip_holds_only_that_run(tmp_p
 
 async def test_naming_an_existing_project_builds_on_its_files_on_purpose(tmp_path):
     async with client_for(make_app(tmp_path)) as c:
-        first = (await c.post("/api/runs", json={"request": "Base", "plan_approval": False})).json()
+        first = (await c.post("/api/runs", json={"request": "Base", "plan_approval": False, "final_review": False})).json()
         await wait_done(c, first["run_id"])
         (tmp_path / first["project"] / "work" / "keep_me.txt").write_text("existing work\n")
-        again = (await c.post("/api/runs", json={"request": "Add to it", "project": first["project"], "plan_approval": False})).json()
+        again = (await c.post("/api/runs", json={"request": "Add to it", "project": first["project"], "plan_approval": False, "final_review": False})).json()
         assert again["project"] == first["project"]
         await wait_done(c, again["run_id"])
         z = await c.get(f"/api/runs/{again['run_id']}/delivery.zip")
@@ -252,9 +252,9 @@ async def test_naming_an_existing_project_builds_on_its_files_on_purpose(tmp_pat
 async def test_the_project_list_has_only_projects_with_runs_newest_first(tmp_path):
     (tmp_path / "some-other-tool-folder").mkdir()  # the volume is shared with other software
     async with client_for(make_app(tmp_path)) as c:
-        a = (await c.post("/api/runs", json={"request": "alpha", "plan_approval": False})).json()
+        a = (await c.post("/api/runs", json={"request": "alpha", "plan_approval": False, "final_review": False})).json()
         await wait_done(c, a["run_id"])
-        b = (await c.post("/api/runs", json={"request": "beta", "plan_approval": False})).json()
+        b = (await c.post("/api/runs", json={"request": "beta", "plan_approval": False, "final_review": False})).json()
         await wait_done(c, b["run_id"])
         names = [p["name"] for p in (await c.get("/api/projects")).json()]
         assert names == [b["project"], a["project"]] and "some-other-tool-folder" not in names
@@ -268,3 +268,57 @@ def test_project_names_are_readable_and_valid():
     assert name == "create-a-calculator-in-p-c5c38465" or PROJECT_RE.match(name)
     assert PROJECT_RE.match(name) and name.endswith("-c5c38465") and len(name) <= 40
     assert new_project_name("!!!", "abcdef01") == "run-abcdef01"
+
+
+async def review_pending(tmp_path: Path, run_id: str, round_no: int, timeout: float = 15) -> dict:
+    """The review_requested event of a given round, read from the run's event file once it appears."""
+    for _ in range(int(timeout / 0.05)):
+        for path in tmp_path.glob(f"*/runs/{run_id}/events.jsonl"):
+            for line in path.read_text().splitlines():
+                event = json.loads(line)
+                if event["type"] == "review_requested" and event["round"] == round_no:
+                    return event
+        await asyncio.sleep(0.05)
+    raise AssertionError(f"no review round {round_no}")
+
+
+async def test_the_run_pauses_for_a_final_review_and_builds_the_zip_only_after_acceptance(tmp_path):
+    async with client_for(make_app(tmp_path)) as c:
+        run_id = (await c.post("/api/runs", json={"request": "Add reset", "plan_approval": False})).json()["run_id"]
+        review = await review_pending(tmp_path, run_id, 1)
+        assert review["summary"] and "backend/app.py" in review["files"]  # what changed is listed for the person
+        info = (await c.get(f"/api/runs/{run_id}")).json()
+        assert info["meta"]["status"] == "running" and not info["has_zip"]  # nothing delivered yet
+        assert (await c.post(f"/api/runs/{run_id}/review", json={"accept": True})).status_code == 200
+        done = await wait_done(c, run_id)
+        assert done["meta"]["status"] == "passed" and done["has_zip"]
+        assert (await c.post(f"/api/runs/{run_id}/review", json={"accept": True})).status_code == 409  # no longer waiting
+        kinds = [e["type"] for e in await events_of(c, run_id)]
+        assert kinds.index("review_requested") < kinds.index("review_accepted") < kinds.index("delivery_ready")
+
+
+async def test_asking_for_changes_sends_them_to_the_project_manager_and_asks_again(tmp_path):
+    async with client_for(make_app(tmp_path)) as c:
+        run_id = (await c.post("/api/runs", json={"request": "Add reset", "plan_approval": False})).json()["run_id"]
+        await review_pending(tmp_path, run_id, 1)
+        assert (await c.post(f"/api/runs/{run_id}/review", json={"accept": False})).status_code == 422  # must say what
+        r = await c.post(f"/api/runs/{run_id}/review", json={"accept": False, "changes": "also reject reused tokens"})
+        assert r.status_code == 200
+        second = await review_pending(tmp_path, run_id, 2)
+        assert second["summary"].startswith("The requested changes are made")
+        await c.post(f"/api/runs/{run_id}/review", json={"accept": True})
+        done = await wait_done(c, run_id)
+        assert done["meta"]["status"] == "passed"
+        assert any(t["objective"].startswith("Apply the requested changes") for t in done["tasks"])
+        evs = await events_of(c, run_id)
+        changes = next(e for e in evs if e["type"] == "review_changes_requested")
+        assert changes["text"] == "also reject reused tokens"
+        assert [e["round"] for e in evs if e["type"] == "review_requested"] == [1, 2]
+
+
+async def test_a_run_that_did_not_pass_is_not_sent_for_review(tmp_path):
+    async with client_for(make_app(tmp_path, scenario="escalate")) as c:
+        run_id = (await c.post("/api/runs", json={"request": "x", "plan_approval": False})).json()["run_id"]
+        info = await wait_done(c, run_id)
+        assert info["meta"]["status"] == "escalated"
+        assert "review_requested" not in [e["type"] for e in await events_of(c, run_id)]

@@ -74,11 +74,17 @@ class StartRequest(BaseModel):
     request: str = Field(min_length=1, max_length=4000)
     project: str | None = None
     plan_approval: bool = True
+    final_review: bool = True  # pause before the zip is built and ask whether anything should change
     concurrency: int | None = Field(default=None, ge=1, le=8)
 
 
 class ApproveRequest(BaseModel):
     approved: bool
+
+
+class ReviewRequest(BaseModel):
+    accept: bool
+    changes: str | None = Field(default=None, max_length=4000)
 
 
 class ResumeRequest(BaseModel):
@@ -92,6 +98,7 @@ class RunHandle:
     events: EventLog
     task: asyncio.Task[Any] | None = None
     approval: asyncio.Future[bool] | None = None
+    review: asyncio.Future[dict[str, Any]] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -138,8 +145,8 @@ def create_app(
     def project_busy(project: str) -> bool:
         return any(h.active and h.workspace.path.name == project for h in handles.values())
 
-    def run_config(concurrency: int | None, plan_approval: bool) -> RunConfig:
-        return RunConfig(concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval)
+    def run_config(concurrency: int | None, plan_approval: bool, final_review: bool) -> RunConfig:
+        return RunConfig(concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval, final_review=final_review)
 
     async def execute(handle: RunHandle, state: OrchestratorState) -> None:
         sandbox = state.get("sandbox_client")
@@ -147,6 +154,7 @@ def create_app(
             await run_graph(state)
         finally:
             handle.approval = None
+            handle.review = None
             if sandbox is not None:
                 await sandbox.close()
 
@@ -155,7 +163,12 @@ def create_app(
             handle.approval = asyncio.get_running_loop().create_future()
             return await handle.approval
 
+        async def review(payload: dict[str, Any]) -> dict[str, Any]:
+            handle.review = asyncio.get_running_loop().create_future()
+            return await handle.review
+
         state["approve"] = approve if state["config"].plan_approval else None  # type: ignore[typeddict-item]
+        state["review"] = review if state["config"].final_review else None  # type: ignore[typeddict-item]
         handle.task = asyncio.create_task(execute(handle, state))
 
     @asynccontextmanager
@@ -209,11 +222,11 @@ def create_app(
         events = EventLog(run_path(ws, run_id) / "events.jsonl")
         handle = RunHandle(run_id, ws, events)
         handles[run_id] = handle
-        config_ = run_config(body.concurrency, body.plan_approval)
+        config_ = run_config(body.concurrency, body.plan_approval, body.final_review)
         write_meta(ws, run_id, project=project, request=body.request, status="running", base_commit=base,
-                   plan_approval=config_.plan_approval, concurrency=config_.concurrency)
+                   plan_approval=config_.plan_approval, final_review=config_.final_review, concurrency=config_.concurrency)
         events.emit("run_started", run_id=run_id, project=project, request=body.request,
-                    plan_approval=config_.plan_approval, concurrency=config_.concurrency)
+                    plan_approval=config_.plan_approval, final_review=config_.final_review, concurrency=config_.concurrency)
         state: OrchestratorState = {
             "request": body.request, "workspace": ws, "run_id": run_id, "model": model_factory(),
             "sandbox_client": sandbox_factory(), "task_log": TaskLog(run_id=run_id, request=body.request, tasks=[]),
@@ -309,6 +322,17 @@ def create_app(
         handle.approval.set_result(body.approved)
         return {"ok": True}
 
+    @app.post("/api/runs/{run_id}/review")
+    async def review_result(run_id: str, body: ReviewRequest) -> dict[str, bool]:
+        """The person's decision on the finished work: deliver it, or ask for changes."""
+        handle = handles.get(run_id)
+        if handle is None or handle.review is None or handle.review.done():
+            raise HTTPException(409, "This run is not waiting for a review.")
+        if not body.accept and not (body.changes or "").strip():
+            raise HTTPException(422, "Say what should change.")
+        handle.review.set_result({"accept": body.accept, "changes": (body.changes or "").strip()})
+        return {"ok": True}
+
     @app.post("/api/runs/{run_id}/resume")
     async def resume_run(run_id: str, body: ResumeRequest) -> dict[str, Any]:
         ws = find(run_id)
@@ -327,7 +351,7 @@ def create_app(
             await asyncio.to_thread(ws.branch, f"run/{run_id}")
         except RuntimeError:
             pass
-        config_ = run_config(meta.get("concurrency"), False)
+        config_ = run_config(meta.get("concurrency"), False, bool(meta.get("final_review", True)))
         write_meta(ws, run_id, status="running", reason=None)
         handle.events.emit("run_resumed", run_id=run_id, guidance=body.guidance or "")
         state: OrchestratorState = {
