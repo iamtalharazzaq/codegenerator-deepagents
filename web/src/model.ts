@@ -311,12 +311,15 @@ export function roleOfTodo(content: string): string | null {
 
 export function todoUi(view: RunView, todo: Todo): UiStatus {
   if (todo.status === "completed") return "passed";
+  // The Project Manager does not always tick its last items. If that specialist's latest task passed, the item is
+  // done: always once the run has passed, and while running for the item the Project Manager has marked in progress.
+  const role = roleOfTodo(todo.content);
+  const latest = role ? latestTask(view.tasks, role) : undefined;
+  if (latest?.status === "pass" && (view.status === "passed" || todo.status === "in_progress")) return "passed";
   const ended = view.status !== "running" && view.status !== "idle";
   if (todo.status === "in_progress") {
     if (!ended) return "running";
-    const role = roleOfTodo(todo.content);
-    const last = role ? latestTask(view.tasks, role) : undefined;
-    return last && last.status === "fail" ? "escalated" : "blocked";
+    return latest && latest.status === "fail" ? "escalated" : "blocked";
   }
   if (view.status === "passed") return "idle";
   return ended ? "blocked" : "queued";
@@ -401,7 +404,8 @@ export function formatDuration(seconds: number): string {
 }
 
 export type FeedItem =
-  | { kind: "user" | "note"; seq: number; text: string; tone?: "info" | "warn" }
+  | { kind: "user"; seq: number; text: string }
+  | { kind: "note"; seq: number; text: string; tone: "info" | "warn" }
   | { kind: "wave"; seq: number; tasks: TaskView[]; parallel: boolean };
 
 /** The run as one chronological feed: what the person said, notes, and the delegations in the order they ran

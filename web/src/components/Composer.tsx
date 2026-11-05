@@ -1,26 +1,28 @@
 import { useState } from "react";
 
-import type { AppConfig } from "../api";
+import type { AppConfig, ProjectRow } from "../api";
 import { isResumable, type RunView } from "../model";
 import { Button } from "../ui/bits";
 
 interface Props {
   view: RunView;
   config: AppConfig | null;
+  projects: ProjectRow[];
   selected: string | null;
   value: string;
   onChange: (v: string) => void;
   busy: boolean;
-  onStart: (text: string, approvePlan: boolean, concurrency: number) => void;
+  onStart: (text: string, approvePlan: boolean, concurrency: number, project: string | null) => void;
   onResume: (text: string) => void;
   onCancel: () => void;
   onNew: () => void;
 }
 
 /** One box with three honest modes: start a run, give guidance for the next attempt, or locked with the reason why. */
-export function Composer({ view, selected, value, onChange, busy, onStart, onResume, onCancel, onNew }: Props) {
+export function Composer({ view, projects, config, selected, value, onChange, busy, onStart, onResume, onCancel, onNew }: Props) {
   const [approvePlan, setApprovePlan] = useState(true);
   const [concurrency, setConcurrency] = useState(1);
+  const [project, setProject] = useState("");
   const resumable = !!selected && isResumable(view.status);
   const running = view.status === "running";
   const finishedOk = !!selected && view.status === "passed";
@@ -28,9 +30,9 @@ export function Composer({ view, selected, value, onChange, busy, onStart, onRes
   const submit = () => {
     if (busy || locked) return;
     if (resumable) onResume(value.trim());
-    else if (value.trim()) onStart(value.trim(), approvePlan, concurrency);
+    else if (value.trim()) onStart(value.trim(), approvePlan, concurrency, project || config?.default_project || null);
   };
-  const label = resumable ? "Guidance for the next attempt" : "What should be built?";
+  const label = resumable ? "Guidance for the next attempt" : running ? "Run in progress" : finishedOk ? "Run finished" : "What should be built?";
   const help = resumable
     ? "Sending resumes this run. The Project Manager is told what passed and what failed, keeps the passed work, and tries the failed work again with your note. This uses the model."
     : running
@@ -49,13 +51,20 @@ export function Composer({ view, selected, value, onChange, busy, onStart, onRes
         className="w-full resize-y rounded-lg border border-control bg-page px-3 py-2 text-fg placeholder:text-fg-3 disabled:opacity-60"
       />
       {!resumable && !locked && (
-        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[13px] text-fg-2">
+        <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[13px] text-fg-2">
           <label className="inline-flex items-center gap-2"><input type="checkbox" checked={approvePlan} onChange={(e) => setApprovePlan(e.target.checked)} />Ask me to approve the plan</label>
+          <label className="inline-flex items-center gap-2">Project
+            <select value={project} onChange={(e) => setProject(e.target.value)} aria-describedby="project-help" className="max-w-[210px] rounded-md border border-control bg-page px-1.5 py-0.5 text-fg">
+              <option value="">New project (empty)</option>
+              {projects.map((p) => <option key={p.name} value={p.name}>{p.name}</option>)}
+            </select>
+          </label>
           <label className="inline-flex items-center gap-2">Run at once
             <select value={concurrency} onChange={(e) => setConcurrency(Number(e.target.value))} className="rounded-md border border-control bg-page px-1.5 py-0.5 text-fg">{[1, 2, 3, 4].map((n) => <option key={n}>{n}</option>)}</select>
           </label>
         </div>
       )}
+      {!resumable && !locked && <p id="project-help" className="mt-1.5 text-[13px] text-fg-3">{project ? "Builds on that project's files; the zip will hold the whole project." : "A new project starts empty, so the zip holds only what this request builds."}</p>}
       <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
         <span className="text-[13px] text-fg-3">{locked ? "" : "Ctrl+Enter to send"}</span>
         {running ? <Button onClick={onCancel}>Cancel run</Button>

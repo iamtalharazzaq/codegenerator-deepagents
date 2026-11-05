@@ -18,7 +18,6 @@ export function RunList({ runs, selected, onSelect, onNew }: { runs: RunRow[]; s
               <span className="mt-1.5 flex flex-wrap items-center gap-2">
                 <RunStatusChip status={r.status as RunStatus} size="sm" />
                 {r.tasks_total > 0 && <span className="text-[13px] tabular-nums text-fg-2">{r.tasks_done}/{r.tasks_total}</span>}
-                <span className="font-mono text-[13px] text-fg-3">{r.run_id}</span>
               </span>
             </button>
           </li>

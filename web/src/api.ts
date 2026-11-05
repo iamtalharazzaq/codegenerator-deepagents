@@ -9,8 +9,14 @@ export interface RunRow {
   tasks_total: number;
 }
 
+export interface ProjectRow {
+  name: string;
+  runs: number;
+  last_run_at: number;
+}
+
 export interface AppConfig {
-  default_project: string;
+  default_project: string | null;
   concurrency: number;
   demo: boolean;
 }
@@ -43,6 +49,7 @@ const post = <T>(path: string, body?: unknown) => call<T>(path, { method: "POST"
 export const api = {
   config: () => call<AppConfig>("/api/config"),
   runs: () => call<RunRow[]>("/api/runs"),
+  projects: () => call<ProjectRow[]>("/api/projects"),
   start: (body: StartBody) => post<{ run_id: string; project: string }>("/api/runs", body),
   approve: (id: string, approved: boolean) => post<{ ok: boolean }>(`/api/runs/${id}/approve`, { approved }),
   resume: (id: string, guidance: string) => post<{ run_id: string }>(`/api/runs/${id}/resume`, { guidance: guidance || null }),

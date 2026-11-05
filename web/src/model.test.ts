@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { mockEvents, mockView } from "./mock";
 import {
-  agentUi, applyEvent, attention, emptyRun, formatDuration, progress, replay, roleOfTodo, runUi, taskUi, todoUi, waves, type RunEvent,
+  agentUi, applyEvent, attention, emptyRun, feed, formatDuration, nowLine, progress, repeatsEarlier, replay, roleOfTodo, runUi, taskUi, todoUi, waves, type RunEvent,
 } from "./model";
 
 let seq = 0;
@@ -22,16 +22,18 @@ describe("the escalated example (the screen in the design brief)", () => {
     expect(view.runId).toBe("d2463e52");
   });
 
-  it("puts the blocker first: which agent, how many tries, why, and how many guardrail hits", () => {
+  it("names the blocker once: which agent and how many tries (the reason stays on its task card)", () => {
     const a = attention(view);
-    expect(a?.kind).toBe("blocked");
-    if (a?.kind !== "blocked") return;
-    expect(a.role).toBe("backend_developer");
-    expect(a.title).toBe("Backend Developer failed 2 times");
-    expect(a.detail).toContain("Recursion limit of 60");
-    expect(a.tries).toBe(2);
-    expect(a.guardrails).toBe(2);
-    expect(a.ui).toBe("escalated");
+    expect(a).toMatchObject({ role: "backend_developer", title: "Backend Developer failed 2 times", tries: 2, ui: "escalated" });
+    expect(a?.taskId).toBe(view.tasks.filter((t) => t.role === "backend_developer")[1].id);
+  });
+
+  it("does not repeat an identical error: the second try says it is the same as the first", () => {
+    const [first, second] = view.tasks.filter((t) => t.role === "backend_developer");
+    expect(repeatsEarlier(view, first)).toBeNull();
+    expect(repeatsEarlier(view, second)).toBe(1);
+    const sa = view.tasks.filter((t) => t.role === "solution_architect");
+    expect(repeatsEarlier(view, sa[0])).toBeNull(); // a pass is never a repeat
   });
 
   it("attaches guardrail hits to the task they belong to instead of the conversation", () => {
@@ -73,6 +75,14 @@ describe("the escalated example (the screen in the design brief)", () => {
     expect(view.todoChanges.flatMap((c) => c.completed)).toHaveLength(3);
   });
 
+  it("builds one chronological feed: the request, then each delegation, with no plan, result or finish lines", () => {
+    const items = feed(view);
+    expect(items[0]).toMatchObject({ kind: "user", text: "Make a calculator" });
+    expect(items.filter((i) => i.kind === "wave")).toHaveLength(6);
+    expect(items.map((i) => i.seq)).toEqual([...items.map((i) => i.seq)].sort((a, b) => a - b));
+    expect(items.every((i) => i.kind === "user" || i.kind === "wave")).toBe(true); // nothing repeated as chat lines
+  });
+
   it("orders the work into stages that each wait for the one before", () => {
     const w = waves(view.tasks);
     expect(w.map((x) => x.tasks.map((t) => `${t.role}#${t.attempt}`))).toEqual([
@@ -82,10 +92,10 @@ describe("the escalated example (the screen in the design brief)", () => {
     expect(w.every((x) => !x.parallel)).toBe(true);
   });
 
-  it("collapses the long Project Manager reasoning into a single chat item", () => {
-    const pm = view.chat.filter((c) => c.kind === "pm");
-    expect(pm).toHaveLength(3);
-    expect(pm[0].kind === "pm" && pm[0].text.length).toBeGreaterThan(300); // long on purpose: the UI clamps it to 3 lines
+  it("keeps the Project Manager's reasoning with the plan, not in the feed", () => {
+    expect(view.pmNotes).toHaveLength(3);
+    expect(view.pmNotes[0].text.length).toBeGreaterThan(300); // long on purpose: the UI clamps it to 3 lines
+    expect(feed(view).some((i) => "text" in i && i.text.includes("workspace is empty"))).toBe(false);
   });
 
   it("is replayable from its events alone", () => {
@@ -94,33 +104,56 @@ describe("the escalated example (the screen in the design brief)", () => {
 });
 
 describe("the other examples", () => {
-  it("running: nothing needs attention, the backend is working, the Project Manager is waiting", () => {
+  it("running: nothing is blocked, the backend is working, and one line says so", () => {
     const view = mockView("running");
     expect(view.status).toBe("running");
     expect(attention(view)).toBeNull();
+    expect(nowLine(view)).toEqual({ ui: "running", text: expect.stringContaining("Backend Developer working") });
     expect(agentUi(view, "backend_developer")).toBe("running");
     expect(view.pm).toBe("waiting");
     expect(view.dispatches).toBe(6);
   });
 
-  it("passed: shows the done card with the zip", () => {
+  it("passed: nothing is blocked; the zip and summary are on the result card", () => {
     const view = mockView("passed");
-    expect(attention(view)).toMatchObject({ kind: "done", title: "Run passed" });
+    expect(attention(view)).toBeNull();
+    expect(nowLine(view)).toBeNull();
+    expect(view.finished?.summary).toContain("15 pytest tests pass");
     expect(view.zip).toEqual({ files: 5, partial: false });
     expect(progress(view)).toEqual({ done: 3, total: 3 });
   });
 });
 
 describe("reducer", () => {
-  it("holds the first delegation for approval and shows the plan in the attention card", () => {
+  it("shows the planning while it happens, then holds the first delegation for approval in the plan", () => {
     seq = 0;
-    let s = replay([ev("run_started", { run_id: "r", project: "p", request: "x" }), ev("todos_updated", { todos: [{ content: "Backend Developer: build", status: "pending" }] })]);
+    let s = replay([ev("run_started", { run_id: "r", project: "p", request: "x" }), ev("plan_started")]);
+    expect(nowLine(s)).toEqual({ ui: "running", text: "Project Manager is planning" });
+    expect(s.todos).toEqual([]); // the plan card shows its planning state until the list arrives
+    s = applyEvent(s, ev("pm_said", { text: "Two pieces of work." }));
+    expect(s.pmNotes.map((n) => n.text)).toEqual(["Two pieces of work."]);
     s = applyEvent(s, ev("plan_approval_requested", { todos: [{ content: "Backend Developer: build", status: "pending" }] }));
     expect(s.awaitingApproval).toBe(true);
-    expect(attention(s)).toEqual({ kind: "approval", title: "Approve the plan to start", detail: ["Backend Developer: build"] });
+    expect(nowLine(s)?.text).toBe("Waiting for your approval of the plan");
+    expect(attention(s)).toBeNull(); // the approval buttons are part of the plan card, not a second card
     s = applyEvent(s, ev("plan_approved"));
     expect(s.awaitingApproval).toBe(false);
-    expect(attention(s)).toBeNull();
+  });
+
+  it("feed: tasks that ran at the same time share one row, and what the person said is interleaved in order", () => {
+    seq = 0;
+    const s = replay([
+      ev("run_started", { run_id: "r", project: "p", request: "x" }),
+      ev("task_started", { task: mk("a", "database_engineer", "in_progress") }),
+      ev("task_started", { task: mk("b", "backend_developer", "in_progress") }),
+      ev("task_finished", { task: mk("a", "database_engineer", "pass"), verdict: "pass" }),
+      ev("task_finished", { task: mk("b", "backend_developer", "pass"), verdict: "pass" }),
+      ev("run_finished", { status: "escalated", reason: "pm_failed", message: "stopped" }),
+      ev("run_resumed", { guidance: "go on" }),
+    ]);
+    const items = feed(s);
+    expect(items.map((i) => i.kind)).toEqual(["user", "wave", "user"]);
+    expect(items[1]).toMatchObject({ kind: "wave", parallel: true });
   });
 
   it("runs delegations side by side as one parallel stage", () => {
@@ -154,6 +187,7 @@ describe("reducer", () => {
     expect(s.status).toBe("running");
     expect(s.finished).toBeNull();
     expect(s.chat.at(-1)).toMatchObject({ kind: "user", text: "skip the flaky test" });
+    expect(attention(s)).toBeNull(); // no longer stuck
   });
 
   it("global guardrail hits (no task) still appear in the conversation", () => {
@@ -171,6 +205,20 @@ describe("reducer", () => {
     ]);
     expect(s.todos.map((t) => t.status)).toEqual(["completed", "pending"]);
     expect(progress(s)).toEqual({ done: 1, total: 2 });
+  });
+
+  it("a plan item the Project Manager forgot to tick reads as done when that specialist's latest task passed", () => {
+    seq = 0;
+    const s = replay([
+      ev("run_started", { run_id: "r", project: "p", request: "x" }),
+      ev("todos_updated", { todos: [{ content: "Backend Developer: write it", status: "in_progress" }, { content: "QA Engineer: test it", status: "pending" }] }),
+      ev("task_started", { task: mk("a", "backend_developer", "in_progress") }),
+      ev("task_finished", { task: mk("a", "backend_developer", "pass"), verdict: "pass" }),
+    ]);
+    expect(s.todos.map((t) => todoUi(s, t))).toEqual(["passed", "queued"]); // running: only the in-progress item is inferred
+    const done = applyEvent(applyEvent(s, ev("task_started", { task: mk("b", "qa_engineer", "in_progress") })), ev("task_finished", { task: mk("b", "qa_engineer", "pass"), verdict: "pass" }));
+    const end = applyEvent(done, ev("run_finished", { status: "passed", reason: "all_passed", message: "ok" }));
+    expect(end.todos.map((t) => todoUi(end, t))).toEqual(["passed", "passed"]); // a passed run never shows leftover Blocked items
   });
 
   it("shows when the Project Manager had to be asked to delegate", () => {

@@ -32,6 +32,18 @@ Guardrails enforced in code: tool allowlist per role; per-task write scope (neve
 and file-count budgets); QA/DevOps status comes from the real exit code of `run_tests` / `run_build`; secret scan
 blocks the zip; a plan can be held for approval.
 
+## Projects
+
+Every run gets its own new project folder by default (named from the request, for example
+`calculator-in-python-c5c38465`), so the zip holds only what that request built. Pick an existing project in the
+composer to keep building on its files on purpose; the zip then holds the whole project. A project has one active run
+at a time.
+
+## What the model is sent
+
+`docs/PROMPTS-AS-SENT.md` shows the exact system prompts, first messages, tool descriptions and injected messages.
+Regenerate it with `make prompts` after editing any `prompt.md`, `config.yaml`, `TEAM_RULES` or tool docstring.
+
 ## Layout
 
 - `orchestrator/` graph, loop rules, guardrails, events, runner, server, demo model, roles (`agents/<role>/`)

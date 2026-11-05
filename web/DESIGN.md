@@ -2,24 +2,38 @@
 
 The screen answers three questions in this order: **what state is the run in, what failed, what do I do next.**
 
-## Hierarchy
+## One home per fact
 
-1. **Run status** (header): one large status chip, then two meters (tasks done, dispatch budget), at-once count, elapsed
-   time and a copyable run ID. When the run is stuck, "Resume run" is the only primary button in the header.
-2. **Blocking issue** (Attention card, top of the right panel): the blocker in one sentence (who, how many tries, why),
-   the guardrail hits that led to it, and the next steps: Resume with guidance, Retry task, View logs, Agent details.
-   It also carries "Approve the plan" while the run waits for you, and the zip when the run passed.
-3. **Progress** (stages or agent hub, then the plan checklist).
-4. **Details** (conversation, revision history, event log, per-agent panel), folded away until asked for.
+Nothing is said twice. Each fact has exactly one place:
+
+| Fact | Where it lives |
+|---|---|
+| Run status | the header chip (the run list has its own row per run) |
+| What is happening right now | one live line under the header |
+| The plan, and the Project Manager's reasoning | the Plan card (checklist, approval buttons, History) |
+| What each specialist did, and why it failed | one task card in the Activity feed, updated in place |
+| What stopped the run, and the next step | the Blocker card (shown only when stuck; it names the task, the reason stays on the task card) |
+| What you get | the Result card (summary, zip, full report on demand) |
+| Debugging detail | the Event log drawer |
+
+A retry that fails the same way says "Same error as try 1" instead of repeating the text.
+
+## Layout
+
+1. **Header**: status chip, tasks done, dispatches used, elapsed time, project name, copyable run ID, and "Resume run" when stuck.
+2. **Now line**: "Project Manager is planning", "Waiting for your approval", "Backend Developer working: write_file …".
+3. **Left**: runs. **Centre**: the Activity feed (what you said, then each delegation; tasks that ran together share an
+   "N at once" row) and the composer. **Right**: Blocker, Result, Plan, Team.
+4. **Planning is shown where it happens.** While the Project Manager works out the plan, the Plan card says so, shows its
+   reasoning as it arrives, and holds skeleton lines until the checklist appears.
 
 ## Progressive disclosure
 
-- Project Manager messages are clamped to three lines with "Show more".
-- Results are one compact timeline row (icon, agent, outcome, try, one-line reason). Guardrail hits are a badge on the
-  task they belong to, not a banner.
-- The plan is a checklist; every change to it is a diff (+ added, − removed, ✓ completed) inside a collapsed
-  "Revision history", with the reason as one line above the checklist.
-- The event log is a bottom drawer: one line when closed; filters (kind, task) and a live tail when open.
+- Task cards show the objective, status, try and time; writes, tool calls, guardrail hits and the result file are behind
+  "Details". A guardrail hit is a badge on the task.
+- The Project Manager's note is clamped to three lines with "Show more"; older notes and every plan change (+ added, −
+  removed) are inside "History".
+- The Team (hub) diagram is a collapsible card; clicking a specialist scrolls to its latest task card.
 
 ## Status system
 
@@ -46,25 +60,16 @@ border below 3:1 (WCAG 2.1 AA, 1.4.3 and 1.4.11).
   the log. Body 14px, nothing below 13px.
 - Spacing is Tailwind's 4px scale; the layout uses 1, 2, 3, 4 and 6 (4, 8, 12, 16, 24px). Cards use a 16px inner gap.
 
-## Graph views
-
-- **Stages** (default): delegations as columns in the order they ran. Tasks in one column ran at the same time; every
-  stage waited for the one before. Not-started work sits in a last column with what blocks it. Cards show tries,
-  duration and guardrail hits.
-- **Agent hub**: the ten specialists around the Project Manager. A line means "has been given work", a moving line
-  means "working now". Click any card or node for the side panel (every try, its reason, what it touched, its tool
-  calls, the result file). Esc closes it.
-
 ## Responsive and accessible
 
-- Wide: runs | conversation | status, graph, plan. Narrow (< 1024px): Chat / Plan / Graph tabs; the Attention card stays
-  on top; the page scrolls and the chat has its own scroll area.
-- Every control is a real button or input with a visible focus ring; the graph nodes are focusable and open with
-  Enter or Space; the log is a labelled `role="log"`; meters are `role="progressbar"` with text values.
+- Wide: runs | activity | blocker, result, plan, team. Narrow (< 1024px): Activity / Plan / Team tabs; the Blocker card
+  stays on top; the page scrolls and the activity feed has its own scroll area.
+- Every control is a real button or input with a visible focus ring; the team diagram's nodes are focusable and jump to
+  their task with Enter or Space; the log is a labelled `role="log"`; meters are `role="progressbar"` with text values.
 - Animation stops under `prefers-reduced-motion`.
 
 ## Mock data
 
-`?mock=escalated` (the screen in the design brief: 3/7 tasks, 6/20 dispatches, Backend Developer failed twice),
-`?mock=running` and `?mock=passed` replay event logs from `src/mock.ts` through the same reducer as a live run, so
+`?mock=escalated` (3/7 tasks, 6/20 dispatches, Backend Developer failed twice), `?mock=running`, `?mock=passed`,
+`?mock=planning` (the Project Manager is thinking) and `?mock=approval` (the plan waits for a decision) replay event logs from `src/mock.ts` through the same reducer as a live run, so
 the mock cannot drift from what the app really draws.

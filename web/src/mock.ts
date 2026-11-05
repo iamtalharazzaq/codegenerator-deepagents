@@ -118,15 +118,39 @@ function passed(): RunEvent[] {
   return log.events;
 }
 
-export type MockName = "escalated" | "running" | "passed";
+export type MockName = "escalated" | "running" | "passed" | "planning" | "approval";
+
+function planning(withPlan: boolean): RunEvent[] {
+  const log = new Log();
+  log.emit("run_started", 0, { run_id: "e91b07c3", project: "calculator-in-python-e91b07c3", request: "Create a calculator in python only, with only arithmetic operators", concurrency: 1, max_dispatches: 20 });
+  log.emit("plan_started", 1);
+  log.emit("pm_said", 4, { text: "This is a single small module, so one specialist is enough. I will ask the Backend Developer for a Python file with the seven arithmetic operators and nothing else: no web server, no frontend and no design documents." });
+  if (withPlan) {
+    const items = todos([["Backend Developer: write calculator.py with + - * / // % ** only", "pending"], ["QA Engineer: write and run a pytest file for it", "pending"]]);
+    log.emit("todos_updated", 2, { todos: items });
+    log.emit("plan_approval_requested", 1, { todos: items });
+  }
+  return log.events;
+}
+
+/** Unfinished mocks end "now", so their elapsed time and live pulses look like a real run in progress. */
+function endNow(events: RunEvent[]): RunEvent[] {
+  const shift = Date.now() / 1000 - events[events.length - 1].ts;
+  return events.map((e) => ({
+    ...e, ts: e.ts + shift,
+    ...(e.task ? { task: { ...e.task } } : {}),
+  }));
+}
 
 export function mockEvents(name: MockName): RunEvent[] {
+  if (name === "planning") return endNow(planning(false));
+  if (name === "approval") return endNow(planning(true));
   if (name === "passed") return passed();
   const all = escalated();
   if (name === "escalated") return all;
   // running: stop while the second backend attempt is working
   const cut = all.findIndex((e) => e.type === "task_started" && e.task.id === "d90a41be");
-  return all.slice(0, cut + 4);
+  return endNow(all.slice(0, cut + 4));
 }
 
 export function mockView(name: MockName): RunView {
@@ -146,5 +170,6 @@ export function mockRuns(): RunRow[] {
 
 export function mockFromUrl(search: string): MockName | null {
   const value = new URLSearchParams(search).get("mock");
-  return value === "escalated" || value === "running" || value === "passed" ? value : value === "" ? "escalated" : null;
+  const names = ["escalated", "running", "passed", "planning", "approval"];
+  return value !== null && names.includes(value) ? (value as MockName) : value === "" ? "escalated" : null;
 }

@@ -2,12 +2,11 @@ import { formatDuration, isResumable, progress, type RunView } from "../model";
 import { Button, CopyButton, Meter, useNow } from "../ui/bits";
 import { RunStatusChip } from "../ui/Status";
 
-/** Run status first, then progress, then the budget. The one primary action is the next step when the run is stuck. */
+/** Run status, progress, and the one primary action when the run is stuck. Each fact appears here once. */
 export function Header({ view, demo, mock, onResume }: { view: RunView; demo: boolean; mock: boolean; onResume: () => void }) {
   const now = useNow(view.status === "running");
   const { done, total } = progress(view);
   const used = view.dispatches / Math.max(1, view.maxDispatches);
-  const budgetTone = used >= 1 ? "escalated" : used >= 0.75 ? "blocked" : "running";
   const elapsed = view.startedAt ? (view.endedAt ?? now) - view.startedAt : 0;
   const empty = view.status === "idle";
   return (
@@ -23,13 +22,13 @@ export function Header({ view, demo, mock, onResume }: { view: RunView; demo: bo
       {!empty && (
         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
           <RunStatusChip status={view.status} />
-          <Meter label="Tasks" value={done} max={Math.max(total, 1)} text={`${done}/${total}`} tone="passed" />
-          <Meter label="Dispatch budget" value={view.dispatches} max={view.maxDispatches} text={`${view.dispatches}/${view.maxDispatches}`} tone={budgetTone} />
-          <dl className="flex gap-6 text-[13px]">
-            <div><dt className="text-fg-2">At once</dt><dd className="font-semibold tabular-nums">{view.concurrency}</dd></div>
-            <div><dt className="text-fg-2">Elapsed</dt><dd className="font-semibold tabular-nums">{formatDuration(elapsed)}</dd></div>
-          </dl>
-          {view.runId && <CopyButton text={view.runId} label="Copy run ID" />}
+          {total > 0 && <Meter label="Tasks" value={done} max={total} text={`${done}/${total}`} tone="passed" />}
+          <p className={`text-[13px] tabular-nums ${used >= 1 ? "text-escalated" : used >= 0.75 ? "text-blocked" : "text-fg-2"}`}>{view.dispatches}/{view.maxDispatches} dispatches</p>
+          <p className="text-[13px] tabular-nums text-fg-2">{formatDuration(elapsed)}</p>
+          <p className="flex min-w-0 items-center gap-2 text-[13px] text-fg-2">
+            {view.project && <span className="truncate font-mono" title="Project folder">{view.project}</span>}
+            {view.runId && <CopyButton text={view.runId} label="Copy run ID" />}
+          </p>
         </div>
       )}
     </header>
