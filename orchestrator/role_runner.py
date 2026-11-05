@@ -25,6 +25,9 @@ from langchain_core.tools import BaseTool
 from pydantic import BaseModel, ValidationError
 
 from orchestrator.guardrails import (
+    MAX_BLOCKED_WRITES,
+    MAX_REPEATED_CALLS,
+    AgentStuck,
     BlockHandler,
     ToolRecord,
     WriteScope,
@@ -140,6 +143,7 @@ async def run_role_traced(
     write_scope: WriteScope | None = None,
     on_block: BlockHandler | None = None,
     on_tool: ToolHook | None = None,
+    max_steps: int = 60,
 ) -> RoleRun:
     """Like `run_role`, but streams the agent so every tool call is observed (and recorded for the machine checks),
     and enforces a write scope. Returns the final reply plus the tool calls made."""
@@ -158,8 +162,14 @@ async def run_role_traced(
     )
     pending: dict[str, ToolRecord] = {}
     calls: list[ToolRecord] = []
+    repeats: dict[str, int] = {}
     final = ""
-    async for chunk in agent.astream({"messages": [{"role": "user", "content": objective}]}, stream_mode="updates"):
+    stream = agent.astream(
+        {"messages": [{"role": "user", "content": objective}]},
+        config={"recursion_limit": max_steps},  # a step budget: a looping agent cannot run forever
+        stream_mode="updates",
+    )
+    async for chunk in stream:
         for update in chunk.values():
             for message in _messages(update):
                 if isinstance(message, AIMessage):
@@ -180,6 +190,12 @@ async def run_role_traced(
                     calls.append(record)
                     if on_tool is not None:
                         on_tool("result", record)
+                    key = f"{record.name}:{json.dumps(record.args, sort_keys=True, default=str)[:400]}"
+                    repeats[key] = repeats.get(key, 0) + 1
+                    if repeats[key] > MAX_REPEATED_CALLS:
+                        raise AgentStuck(f"repeated the same {record.name} call {repeats[key]} times")
+                    if write_scope is not None and write_scope.blocked >= MAX_BLOCKED_WRITES:
+                        raise AgentStuck(f"tried to write outside its scope {write_scope.blocked} times")
     return RoleRun(final, calls)
 
 

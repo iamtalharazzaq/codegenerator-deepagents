@@ -382,3 +382,22 @@ async def test_files_outside_every_declared_scope_are_committed_at_the_end(tmp_p
     commits = _commits(ws, base)
     assert commits[0][1] == ["a/f.py"] and commits[-1][0].startswith("run r1") and commits[-1][1] == ["stray.txt"]
     assert not graph_mod.git(ws.work, "status", "--porcelain")
+
+
+async def test_a_stuck_agent_fails_the_attempt_with_a_clear_reason_and_a_guardrail_event(tmp_path, monkeypatch):
+    from orchestrator.guardrails import AgentStuck
+
+    answers = iter([AgentStuck("tried to write outside its scope 3 times"), RoleRun(PASS)])
+    Harness(monkeypatch, [plan(t("a", writes=["greet.py"])), plan(t("a", writes=["greet.py"]))], lambda r, o: next(answers))
+    result = await run(start(tmp_path))
+    assert result["status"] == "passed"
+    hit = next(e for e in result["events"].since(0) if e["type"] == "guardrail_hit")
+    assert hit["kind"] == "agent_stuck" and "outside its scope" in hit["reason"]
+    assert "outside its scope" in result["task_log"].tasks[0].reasons[0]
+
+
+def test_the_task_prompt_does_not_tell_the_model_to_write_its_reply_to_a_file():
+    import inspect
+
+    source = inspect.getsource(graph_mod._run_task)
+    assert "do not write it to a file" in source and "result artifact" not in source

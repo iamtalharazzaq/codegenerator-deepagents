@@ -75,12 +75,21 @@ def forbidden_reason(path: str) -> str | None:
     return None
 
 
+MAX_BLOCKED_WRITES = 3  # a task that keeps writing outside its scope is stuck, not careless
+MAX_REPEATED_CALLS = 3  # the same tool call with the same arguments more than this many times is a loop
+
+
+class AgentStuck(Exception):
+    """The agent is looping or ignoring a guardrail; the task is stopped and counts as a failed attempt."""
+
+
 @dataclass
 class WriteScope:
     globs: tuple[str, ...] = ()
     max_file_bytes: int = 200_000
     max_files: int = 30
     written: set[str] = field(default_factory=set)
+    blocked: int = 0
 
     def check(self, raw_path: str, content_bytes: int) -> str | None:
         """None when the write is allowed, else the reason it is blocked."""
@@ -128,9 +137,14 @@ class WriteScopeMiddleware(AgentMiddleware[Any, Any, Any]):
         if reason is None:
             self.scope.record(path)
             return None
+        self.scope.blocked += 1
         if self._on_block is not None:
             self._on_block(call["name"], path, reason)
-        return ToolMessage(content=f"Blocked: {reason}.", tool_call_id=call["id"], status="error")
+        return ToolMessage(
+            content=f"Blocked: {reason}. Do not retry this path; write only inside your task's scope.",
+            tool_call_id=call["id"],
+            status="error",
+        )
 
     def wrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]

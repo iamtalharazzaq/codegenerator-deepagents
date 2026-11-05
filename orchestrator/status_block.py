@@ -27,6 +27,13 @@ _STATUS_BLOCK_RE = re.compile(
 )
 
 
+# Small models often wrap the block in a code fence instead of writing the `---` lines. That is still a structured
+# block with explicit keys, so it is accepted, but only as the very last thing in the reply (never from the middle).
+_FENCED_END_RE = re.compile(
+    r"(?:^|\n)```[A-Za-z]*\n\s*status:\s*(pass|fail)\s*\nreason:\s*(.+?)\s*\n```\s*\Z",
+)
+
+
 @dataclass(frozen=True)
 class StatusResult:
     status: Literal["pass", "fail"]
@@ -39,6 +46,9 @@ def parse_status(text: str) -> StatusResult:
     Returns StatusResult("fail", "no status block found in the artifact")
     when no block is present.
     """
+    fenced = _FENCED_END_RE.search(text)
+    if fenced is not None:
+        return StatusResult(fenced.group(1), fenced.group(2))  # type: ignore[arg-type]
     matches = list(_STATUS_BLOCK_RE.finditer(text))
     if not matches:
         return StatusResult("fail", "no status block found in the artifact")

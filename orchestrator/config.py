@@ -20,6 +20,7 @@ class RunConfig:
     # Per-task write budgets (guardrails).
     max_file_bytes: int = 200_000
     max_files_per_task: int = 30
+    max_agent_steps: int = 60  # model/tool steps one task may take
     # Switches.
     plan_approval: bool = False  # the API turns this on by default
     report_summary: bool = False  # ask the Project Manager for a short summary paragraph in report.md

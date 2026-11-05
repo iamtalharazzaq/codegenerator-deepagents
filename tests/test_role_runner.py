@@ -135,3 +135,32 @@ def test_plan_summary_is_the_text_before_the_json():
     from orchestrator.role_runner import plan_summary
 
     assert plan_summary("Backend first, then QA.\n```json\n[]\n```") == "Backend first, then QA."
+
+
+async def test_an_agent_that_keeps_writing_outside_its_scope_is_stopped(tmp_path: Path):
+    """Seen with the real 9B model: it retried a blocked write 20+ times until the task timeout."""
+    from orchestrator.guardrails import AgentStuck, WriteScope
+    from orchestrator.role_runner import run_role_traced
+
+    attempts = [tool_call_message("write_file", {"file_path": f"/x{i}.md", "content": "x"}, f"c{i}") for i in range(10)]
+    model = ScriptedModel(messages=iter(attempts))
+    with pytest.raises(AgentStuck, match="outside its scope 3 times"):
+        await run_role_traced("backend_developer", "go", model, tmp_path, write_scope=WriteScope(globs=("greet.py",)))
+    assert not list(tmp_path.glob("x*.md"))
+
+
+async def test_an_agent_repeating_the_same_call_is_stopped(tmp_path: Path):
+    from orchestrator.guardrails import AgentStuck
+    from orchestrator.role_runner import run_role_traced
+
+    same = [tool_call_message("read_file", {"file_path": "/nope.txt"}, f"c{i}") for i in range(10)]
+    with pytest.raises(AgentStuck, match="repeated the same read_file call 4 times"):
+        await run_role_traced("backend_developer", "go", ScriptedModel(messages=iter(same)), tmp_path)
+
+
+async def test_a_step_budget_stops_an_endless_agent(tmp_path: Path):
+    from orchestrator.role_runner import run_role_traced
+
+    varied = [tool_call_message("read_file", {"file_path": f"/f{i}.txt"}, f"c{i}") for i in range(40)]
+    with pytest.raises(Exception, match="[Rr]ecursion"):
+        await run_role_traced("backend_developer", "go", ScriptedModel(messages=iter(varied)), tmp_path, max_steps=8)

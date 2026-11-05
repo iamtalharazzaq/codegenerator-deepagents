@@ -35,6 +35,7 @@ from orchestrator.config import RunConfig
 from orchestrator.delivery import build_zip
 from orchestrator.events import EventLog
 from orchestrator.guardrails import (
+    AgentStuck,
     ToolRecord,
     WriteScope,
     machine_verdict,
@@ -459,8 +460,11 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
         f"{task.objective}\n\n"
         f"Inputs: {', '.join(task.inputs) or 'none'}\n"
         f"Done when: {task.done_condition}\n\n"
-        f"Your reply is saved as the result artifact `{task.id}.md`. End it with exactly this status block "
-        f"(status is pass only if the done condition is met):\n{STATUS_BLOCK_FORMAT}"
+        "Do the work with your tools. Then reply with a short summary of what you did. Your reply is recorded "
+        "automatically: do not write it to a file.\n"
+        "The LAST lines of your reply must be exactly this, with the dashes, not inside a code block "
+        "(status is pass only if the done condition is met):\n"
+        f"{STATUS_BLOCK_FORMAT}"
     )
     client = state.get("sandbox_client")
     tools = sandbox_tools_for(task.role, client, ws.path.name) if client is not None else []
@@ -495,9 +499,13 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
                 write_scope=scope,
                 on_block=on_block,
                 on_tool=on_tool,
+                max_steps=cfg.max_agent_steps,
             ),
             cfg.task_timeout_s,
         )
+    except AgentStuck as exc:
+        error = f"stopped: the agent {exc}"
+        _emit(state, "guardrail_hit", kind="agent_stuck", task_id=task.id, role=task.role, reason=error)
     except TimeoutError:
         error = f"timed out after {cfg.task_timeout_s:g}s"
         _emit(state, "guardrail_hit", kind="task_timeout", task_id=task.id, role=task.role, reason=error)
