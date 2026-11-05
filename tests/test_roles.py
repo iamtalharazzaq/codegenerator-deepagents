@@ -1,0 +1,23 @@
+from orchestrator.roles import ALL_ROLES, load_role
+
+
+def test_all_roles_load_with_nonempty_prompt_and_tools():
+    assert len(ALL_ROLES) == 11
+    assert ALL_ROLES[0] == "project_manager"
+    for folder in ALL_ROLES:
+        role = load_role(folder)
+        assert role.folder == folder
+        assert role.name and role.description
+        assert len(role.tools) > 0
+        assert 0 < len(role.prompt) < 1500
+
+
+def test_project_manager_has_planning_tools():
+    role = load_role("project_manager")
+    assert "write_file" in role.tools
+    assert "read_file" in role.tools
+
+
+def test_qa_and_devops_reference_sandbox_tools():
+    assert "run_tests" in load_role("qa_engineer").tools
+    assert "run_build" in load_role("devops_engineer").tools

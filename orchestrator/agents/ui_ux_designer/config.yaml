@@ -1,0 +1,3 @@
+name: ui-ux-designer
+description: Designs screens and the design system from requirements and architecture.
+tools: [ls, read_file, write_file]

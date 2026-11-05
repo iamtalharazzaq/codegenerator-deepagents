@@ -1,0 +1,3 @@
+name: frontend-developer
+description: Implements frontend code against the architecture and design system.
+tools: [ls, read_file, write_file, edit_file]

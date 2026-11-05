@@ -1,0 +1,3 @@
+name: qa-engineer
+description: Writes and runs test cases that prove the implemented behavior actually works.
+tools: [ls, read_file, write_file, edit_file, run_tests]

@@ -1,0 +1,3 @@
+name: solution-architect
+description: Designs architecture, service boundaries, and technical approach from the requirements.
+tools: [ls, read_file, write_file]

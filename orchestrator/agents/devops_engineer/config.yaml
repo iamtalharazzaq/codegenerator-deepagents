@@ -1,0 +1,3 @@
+name: devops-engineer
+description: Handles deploy, CI/CD, infra, release/cutover, and security (secrets/deps/auth); absorbs Security Engineer and Release Manager.
+tools: [ls, read_file, write_file, edit_file, run_build]

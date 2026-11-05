@@ -1,0 +1,3 @@
+name: business-analyst
+description: Builds project/stack/constraints understanding and writes it up as short notes for the rest of the roster.
+tools: [ls, read_file, write_file]

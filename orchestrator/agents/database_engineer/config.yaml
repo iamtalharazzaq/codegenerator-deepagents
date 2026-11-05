@@ -1,0 +1,3 @@
+name: database-engineer
+description: Designs the data model and writes migrations.
+tools: [ls, read_file, write_file]

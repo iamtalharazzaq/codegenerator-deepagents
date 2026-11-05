@@ -1,0 +1,3 @@
+name: product-manager
+description: Turns project understanding into requirements, user stories, and MVP scope.
+tools: [ls, read_file, write_file]

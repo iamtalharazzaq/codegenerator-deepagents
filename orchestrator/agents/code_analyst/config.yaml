@@ -1,0 +1,3 @@
+name: code-analyst
+description: Builds the code graph, finds hotspots, and reviews code quality as a gate (absorbs Tech Lead's review duties).
+tools: [ls, read_file, grep, write_file]
