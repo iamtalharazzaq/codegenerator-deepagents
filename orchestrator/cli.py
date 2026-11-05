@@ -128,7 +128,9 @@ def resume(project: str, workspaces_root: Path, run_id: str) -> None:
     """Resume a previously started run from its saved task log."""
     workspace = Workspace(Path(workspaces_root), project)
     workspace.create()
-    log_path = run_dir(workspace, run_id) / TASK_LOG_FILE
+    # Read-only lookup: unlike `run_dir()`, this must not create `runs/<run_id>/` just to check whether
+    # it holds a usable task log -- a missing/malformed run should leave the filesystem untouched.
+    log_path = workspace.path / "runs" / run_id / TASK_LOG_FILE
     try:
         task_log = load_task_log(log_path)
     except (FileNotFoundError, json.JSONDecodeError) as err:

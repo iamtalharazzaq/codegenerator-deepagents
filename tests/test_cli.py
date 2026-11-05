@@ -22,6 +22,8 @@ def test_resume_with_missing_run_id_fails_clearly(tmp_path: Path):
     assert result.exit_code == 1
     assert "doesnotexist" in result.output
     assert "Traceback" not in result.output
+    # A missing run must leave the filesystem untouched -- no stray runs/<run_id>/ directory.
+    assert not (tmp_path / "p1" / "runs" / "doesnotexist").exists()
 
 
 def test_run_exits_nonzero_when_the_graph_escalates(tmp_path: Path, monkeypatch):
