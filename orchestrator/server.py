@@ -54,6 +54,7 @@ class Settings:
     concurrency: int = 1
     web_dist: Path | None = None
     demo: bool = False
+    demo_sandbox: bool = False  # in demo mode, let QA really call the sandbox (ORCH_DEMO_SANDBOX=1)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -64,6 +65,7 @@ class Settings:
             concurrency=int(os.environ.get("ORCH_CONCURRENCY", "1")),
             web_dist=Path(dist) if dist else None,
             demo=os.environ.get("ORCH_DEMO") == "1",
+            demo_sandbox=os.environ.get("ORCH_DEMO_SANDBOX") == "1",
         )
 
 
@@ -112,7 +114,7 @@ def create_app(
 
             model_factory = build_model
     if sandbox_factory is None:
-        sandbox_factory = (lambda: None) if cfg.demo else SandboxClient
+        sandbox_factory = SandboxClient if (cfg.demo_sandbox or not cfg.demo) else (lambda: None)
     handles: dict[str, RunHandle] = {}
     app = FastAPI(title="Orchestrator", docs_url=None, redoc_url=None)
 

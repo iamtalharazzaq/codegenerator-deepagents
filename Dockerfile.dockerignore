@@ -1,0 +1,18 @@
+# Build context is the parent directory (it holds this repo and the sibling codewright checkout). Send only those two
+# trees, and none of their caches, so a build never uploads the rest of the home directory.
+*
+!codewright
+!codegenerator-deepagents
+**/.git
+**/node_modules
+**/.venv
+**/__pycache__
+**/.mypy_cache
+**/.pytest_cache
+**/.ruff_cache
+**/.next
+codewright/backups
+codewright/deliveries
+codewright/workspaces
+codegenerator-deepagents/web/dist
+codegenerator-deepagents/.superpowers

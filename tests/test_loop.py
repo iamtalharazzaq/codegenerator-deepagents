@@ -331,3 +331,52 @@ async def test_a_new_prerequisite_in_a_replan_does_not_trigger_another_replan(tm
     assert result["status"] == "passed" and result["replans"] == 1
     assert len(h.plan_prompts) == 2 and h.calls == ["do b", "do x", "do b"]
     assert next(x for x in result["task_log"].tasks if x.role == "qa_engineer").attempt == 2
+
+
+def _commits(ws, base: str) -> list[tuple[str, list[str]]]:
+    raw = graph_mod.git(ws.work, "log", "--reverse", "--format=@@%s", "--name-only", f"{base}..HEAD")
+    out = []
+    for block in raw.split("@@")[1:]:
+        subject, *files = [x for x in block.splitlines() if x.strip()]
+        out.append((subject, files))
+    return out
+
+
+async def test_parallel_tasks_get_separate_commits_with_only_their_own_files(tmp_path, monkeypatch):
+    """Regression (found in a live run): the first task to finish used `git add -A`, so its commit swallowed the
+    sibling's files and the sibling got no commit at all."""
+    state = start(tmp_path, config=RunConfig(concurrency=2))
+    ws = state["workspace"]
+    ws.init_git()
+
+    def worker(role, objective):
+        name = objective.split("\n")[0].split()[-1]  # "a" or "b"
+        (ws.work / name).mkdir(exist_ok=True)
+        (ws.work / name / "f.py").write_text(name)
+        return RoleRun(PASS)
+
+    Harness(monkeypatch, [plan(t("a", writes=["a/**"]), t("b", writes=["b/**"]))], worker)
+    base = graph_mod.git(ws.work, "rev-parse", "HEAD")
+    await run({**state, "base_commit": base})
+    commits = _commits(ws, base)
+    assert sorted(files for _, files in commits) == [["a/f.py"], ["b/f.py"]]
+    assert all(("do a" in s and "a/f.py" in f) or ("do b" in s and "b/f.py" in f) for s, f in commits)
+
+
+async def test_files_outside_every_declared_scope_are_committed_at_the_end(tmp_path, monkeypatch):
+    state = start(tmp_path)
+    ws = state["workspace"]
+    ws.init_git()
+
+    def worker(role, objective):
+        (ws.work / "a").mkdir(exist_ok=True)
+        (ws.work / "a" / "f.py").write_text("x")
+        (ws.work / "stray.txt").write_text("y")  # outside the task's declared scope
+        return RoleRun(PASS)
+
+    Harness(monkeypatch, [plan(t("a", writes=["a/**"]))], worker)
+    base = graph_mod.git(ws.work, "rev-parse", "HEAD")
+    await run({**state, "base_commit": base})
+    commits = _commits(ws, base)
+    assert commits[0][1] == ["a/f.py"] and commits[-1][0].startswith("run r1") and commits[-1][1] == ["stray.txt"]
+    assert not graph_mod.git(ws.work, "status", "--porcelain")

@@ -173,3 +173,49 @@ async def test_demo_model_drives_the_graph_without_a_server(tmp_path, scenario, 
              "task_log": TaskLog("r1", "r", []), "last_failure": None, "events": EventLog(), "config": RunConfig(concurrency=3)}
     result = await run_graph(state)
     assert result["status"] == status
+
+
+class CodeAwareSandbox:
+    """A sandbox that exits with the code the command itself asks for (`sys.exit(N)`), like the real one would."""
+
+    def __init__(self):
+        self.runs: list[list[str]] = []
+
+    async def create_session(self, workspace, services):
+        return {"id": "s1", "workspace": workspace, "services": [], "previews": []}
+
+    async def delete_session(self, sid):
+        pass
+
+    async def close(self):
+        pass
+
+    async def job(self, sid, spec):
+        self.runs.append(spec["cmd"])
+        code = 1 if "sys.exit(1)" in spec["cmd"][-1] else 0
+        yield {"type": "output", "stream": "stdout", "text": "1 failed\n" if code else "2 passed\n"}
+        yield {"type": "exit", "code": code, "timed_out": False, "oom_killed": False, "duration_s": 0.1}
+
+
+async def test_a_qa_pass_claim_is_overruled_by_the_real_exit_code_then_the_retry_passes(tmp_path):
+    from agent.tools.workspace import Workspace
+
+    from orchestrator.config import RunConfig
+    from orchestrator.events import EventLog
+    from orchestrator.runner import run_graph
+    from orchestrator.task import TaskLog
+
+    ws = Workspace(tmp_path, "d")
+    ws.create()
+    sandbox = CodeAwareSandbox()
+    events = EventLog()
+    state = {"request": "r", "workspace": ws, "run_id": "r1", "model": DemoModel(delay=0, real_tools=True),
+             "sandbox_client": sandbox, "task_log": TaskLog("r1", "r", []), "last_failure": None, "events": events,
+             "config": RunConfig(concurrency=2)}
+    result = await run_graph(state)
+    assert result["status"] == "passed"
+    assert len(sandbox.runs) == 2  # QA ran the tests twice
+    hits = [e for e in events.since(0) if e["type"] == "guardrail_hit"]
+    assert [h["kind"] for h in hits] == ["status_overridden"] and "exited 1" in hits[0]["reason"]
+    qa = next(t for t in result["task_log"].tasks if t.role == "qa_engineer")
+    assert qa.attempt == 2 and qa.reasons == ["run_tests exited 1"]

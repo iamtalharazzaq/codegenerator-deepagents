@@ -5,6 +5,15 @@
 #
 # Example build:
 #   docker build -f codegenerator-deepagents/Dockerfile -t codegenerator-deepagents /home/ubuntu
+# Stage 1: build the web UI.
+FROM node:22-slim AS web
+WORKDIR /web
+COPY codegenerator-deepagents/web/package.json codegenerator-deepagents/web/package-lock.json ./
+RUN --mount=type=cache,target=/root/.npm npm ci --no-audit --no-fund
+COPY codegenerator-deepagents/web/ ./
+RUN npm run build
+
+# Stage 2: the orchestrator (CLI and web service).
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -32,11 +41,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --no-dev
 
 COPY codegenerator-deepagents/orchestrator orchestrator
+COPY --from=web /web/dist /app/web/dist
 
 RUN useradd --system --uid 10001 --home-dir /app orchestrator \
     && chown -R orchestrator /app
 USER orchestrator
 
-ENV PATH=/app/.venv/bin:$PATH
+ENV PATH=/app/.venv/bin:$PATH \
+    WEB_DIST=/app/web/dist \
+    WORKSPACES_ROOT=/app/workspaces
 
+EXPOSE 8090
+# `docker run <image>` serves the web UI; `docker run <image> run ...` / `resume ...` use the CLI.
 ENTRYPOINT ["python", "-m", "orchestrator.cli"]
+CMD ["serve", "--port", "8090"]

@@ -68,6 +68,9 @@ def _plan_reply(text: str, tasks: list[dict[str, Any]]) -> str:
 class DemoModel(BaseChatModel):
     delay: float = float(os.environ.get("ORCH_DEMO_DELAY", "0.9"))
     scenario: str = os.environ.get("ORCH_DEMO_SCENARIO", "recover")
+    # QA really calls `run_tests` in the sandbox and always *claims* a pass, so the orchestrator's exit-code check
+    # (not the model's word) decides: the first run exits 1, later runs exit 0 (every run exits 1 when escalating).
+    real_tools: bool = os.environ.get("ORCH_DEMO_SANDBOX") == "1"
     _qa_runs: int = PrivateAttr(default=0)
 
     @property
@@ -115,6 +118,15 @@ class DemoModel(BaseChatModel):
     def _worker(self, role: str, messages: list[BaseMessage], human: str) -> AIMessage:
         wrote = any(isinstance(m, ToolMessage) for m in messages)
         path, body = FILES.get(role, ("/docs/notes.md", "notes\n"))
+        if role == "qa_engineer" and self.real_tools:
+            if not wrote:
+                self._qa_runs += 1
+                failing = self.scenario == "escalate" or self._qa_runs == 1
+                code = f"import sys; print({'1 failed' if failing else '2 passed'!r}); sys.exit({int(failing)})"
+                call = {"name": "run_tests", "args": {"command": ["python", "-c", code], "toolchain": "python"},
+                        "id": uuid.uuid4().hex[:12], "type": "tool_call"}
+                return AIMessage(content="", tool_calls=[call])
+            return AIMessage(content="Ran the tests.\n---\nstatus: pass\nreason: the tests ran\n---")
         if not wrote:
             if role == "qa_engineer":
                 self._qa_runs += 1

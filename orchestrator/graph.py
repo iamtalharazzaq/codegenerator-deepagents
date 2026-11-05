@@ -421,13 +421,31 @@ def _norm(text: str) -> str:
 
 
 def _commit(state: OrchestratorState, task: Task) -> None:
+    """Commit what this task wrote: only its declared paths, so parallel tasks get separate, correctly attributed
+    commits (a plain `git add -A` would sweep a sibling's half-finished files into this task's commit)."""
     ws = state["workspace"]
     if not (ws.work / ".git").exists():
         return
     try:
-        ws.commit_all(f"{task.role}: {task.objective[:60]} [{task.id}]")
+        if task.writes:
+            for spec in task.writes:
+                git(ws.work, "add", "-A", "--", spec.lstrip("/"), check=False)  # a path with no files yet is fine
+        else:
+            git(ws.work, "add", "-A")
+        if git(ws.work, "diff", "--cached", "--name-only"):
+            git(ws.work, "commit", "-q", "-m", f"{task.role}: {task.objective[:60]} [{task.id}]")
     except RuntimeError as exc:
         _emit(state, "plan_warning", message=f"could not commit {task.id}: {exc}"[:200])
+
+
+def _commit_rest(state: OrchestratorState) -> None:
+    """Whatever is still uncommitted when the run ends (files outside every declared scope) goes in one last commit."""
+    ws = state["workspace"]
+    if (ws.work / ".git").exists():
+        try:
+            ws.commit_all(f"run {state['run_id']}: remaining changes")
+        except RuntimeError as exc:
+            _emit(state, "plan_warning", message=f"could not commit the remaining changes: {exc}"[:200])
 
 
 async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int, failures: list[str]) -> None:
@@ -652,6 +670,7 @@ def _finish(state: OrchestratorState, status: Status, reason: str) -> None:
 async def report_node(state: OrchestratorState) -> dict[str, Any]:
     """All tasks passed: scan for secrets, write the report, build the zip."""
     ws, run_id = state["workspace"], state["run_id"]
+    _commit_rest(state)
     findings = scan_secrets(ws.work)
     if findings:
         shown = [{"path": f.path, "line": f.line, "kind": f.kind} for f in findings[:20]]
@@ -678,6 +697,7 @@ async def escalate_node(state: OrchestratorState) -> dict[str, Any]:
     """Terminal: a task failed its last attempt, the planner gave up, or a run limit was hit. Writes the report
     (what passed, what failed, the evidence); a partial zip is offered only when asked for."""
     _settle_blocked(state)  # tasks waiting on something that can no longer pass are blocked, not left pending
+    _commit_rest(state)
     status, reason = _outcome(state)
     await _write_report(
         state, status, reason, "No zip was built because the run did not finish. A partial zip can be requested."
