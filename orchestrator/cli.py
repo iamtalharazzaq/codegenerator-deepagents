@@ -27,15 +27,16 @@ from langchain_core.language_models import BaseChatModel
 
 from orchestrator.config import RunConfig
 from orchestrator.events import Event, EventLog
-from orchestrator.graph import OrchestratorState
 from orchestrator.runner import (
     prepare_workspace,
-    reopen_for_resume,
+    read_meta,
+    resume_note,
     run_graph,
     run_path,
     write_meta,
 )
 from orchestrator.task import TaskLog, load_task_log
+from orchestrator.team import OrchestratorState
 
 TASK_LOG_FILE = "task_log.json"
 
@@ -85,8 +86,8 @@ def _print_event(event: Event) -> None:
     kind = event["type"]
     task: dict = event.get("task") or {}
     line: str | None = None
-    if kind == "plan_ready":
-        line = f"{'replan' if event.get('replan') else 'plan'}: {len(event['tasks'])} task(s). {event.get('reason', '')}".strip()
+    if kind == "todos_updated":
+        line = "to-do: " + "; ".join(f"[{t['status']}] {t['content']}" for t in event["todos"])
     elif kind == "task_started":
         line = f"start  {task['role']} (try {task['attempt']}): {task['objective']}"
     elif kind == "tool_call":
@@ -95,8 +96,6 @@ def _print_event(event: Event) -> None:
         line = f"{event['verdict']:5}  {task['role']}: {task['reason']}"
     elif kind == "guardrail_hit":
         line = f"guardrail {event['kind']}: {event.get('reason', '')}"
-    elif kind == "plan_invalid":
-        line = f"plan rejected: {event['error']}"
     elif kind == "run_finished":
         line = f"finished: {event['status']} ({event['message']})"
     if line:
@@ -119,7 +118,6 @@ def _make_state(
         "model": build_model(),
         "sandbox_client": SandboxClient(),
         "task_log": task_log,
-        "last_failure": task_log.last_failure,
         "config": config,
         "events": events,
         "approve": ask if approve else None,
@@ -195,10 +193,10 @@ def resume(project: str, workspaces_root: Path, run_id: str, guidance: str | Non
         sys.exit(1)
 
     click.echo(f"Resuming run {run_id!r} for project {project!r}.")
-    start_at = reopen_for_resume(task_log, guidance)
-    state = _make_state(workspace, run_id, task_log, RunConfig(concurrency=concurrency), False, None)
-    state["start_at"] = start_at
-    _events(state).emit("run_resumed", run_id=run_id, guidance=guidance or "", start_at=start_at)
+    meta = read_meta(workspace, run_id) or {}
+    state = _make_state(workspace, run_id, task_log, RunConfig(concurrency=concurrency), False, meta.get("base_commit"))
+    state["resume_note"] = resume_note(task_log, guidance, meta.get("reason"))
+    _events(state).emit("run_resumed", run_id=run_id, guidance=guidance or "")
     result = asyncio.run(run_graph(state))
     _finish(result["task_log"])
 

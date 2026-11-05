@@ -2,8 +2,8 @@
 
 - `prepare_workspace`: a git repo in `work/` and a `run/<run_id>` branch; returns the base commit for the report.
 - `meta.json` per run: what the run list shows (status, request, project), updated as the run moves.
-- `reopen_for_resume`: puts an escalated/interrupted run back in a runnable state.
-- `run_graph`: invokes the graph with a recursion limit that fits a full run, and makes sure a run *always* ends
+- `resume_note`: tells the Project Manager what already happened in a stopped run.
+- `run_graph`: runs the team, and makes sure a run *always* ends
   with a `run_finished` event, even when something unexpected raises.
 """
 
@@ -13,15 +13,14 @@ import asyncio
 import json
 import time
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from agent.tools.workspace import Workspace, git
 
 from orchestrator.events import EventLog
-from orchestrator.graph import OrchestratorState, build_graph
 from orchestrator.task import TaskLog
+from orchestrator.team import OrchestratorState, run_team
 
-RECURSION_LIMIT = 1000  # a run is far longer than langgraph's default of 25 steps
 META_FILE = "meta.json"
 
 
@@ -63,34 +62,35 @@ def write_meta(ws: Workspace, run_id: str, **fields: Any) -> dict[str, Any]:
     return meta
 
 
-def reopen_for_resume(log: TaskLog, guidance: str | None = None) -> Literal["plan", "act"]:
-    """Make a stopped run runnable again. A human has intervened, so an escalated task gets a fresh attempt budget;
-    tasks that were blocked behind it become pending again. With a failure to learn from (or guidance), the planner
-    goes first; an interrupted run with nothing failed goes straight back to work."""
-    problems: list[str] = []
+def resume_note(log: TaskLog, guidance: str | None = None, previous_reason: str | None = None) -> str:
+    """Tell the Project Manager what already happened in a stopped run, so it carries on instead of starting over.
+    A delegation that was still running when the run was cut off counts as failed."""
+    lines = []
     for task in log.tasks:
         if task.status == "in_progress":
-            task.status = "pending"
-        elif task.status == "escalated":
-            problems.append(f"role: {task.role}\nobjective: {task.objective}\nreason: {task.reason}")
-            task.status, task.attempt, task.reasons = "fail", 0, []
-        elif task.status == "blocked":
-            task.status, task.reason = "pending", ""
-    failure = log.last_failure or ("\n\n".join(problems) if problems else None)
+            task.status, task.reason = "fail", "interrupted before it finished"
+        done = "passed" if task.status == "pass" else "FAILED"
+        extra = f" | reason: {task.reason}" if task.status != "pass" and task.reason else ""
+        lines.append(f"- {done}: {task.role}: {task.objective}{extra}")
+    note = ["This run was stopped earlier."]
+    if previous_reason:
+        note.append(f"How it ended: {previous_reason}.")
+    if lines:
+        note += ["Work so far (do not redo what passed):", *lines]
     if guidance:
-        failure = (failure + "\n\n" if failure else "A person asked to continue this run.\n\n") + f"Guidance from the person:\n{guidance}"
-    log.last_failure = failure
-    return "plan" if failure else "act"
+        note += ["", f"Guidance from the person: {guidance}"]
+    note += ["", "Carry on from here: fix or redo only what is needed, then finish with the final status block."]
+    return "\n".join(note)
 
 
 async def run_graph(state: OrchestratorState) -> OrchestratorState:
-    """Run the graph to its end. Never raises for a failed run; always leaves `run_finished` in the event log."""
+    """Run the team to its end. Never raises for a failed run; always leaves `run_finished` in the event log."""
     ws, run_id = state["workspace"], state["run_id"]
     events: EventLog | None = state.get("events")
     write_meta(ws, run_id, status="running", request=state["request"])
     result: Any = state
     try:
-        result = await build_graph().ainvoke(state, {"recursion_limit": RECURSION_LIMIT})
+        result = await run_team(state)
     except asyncio.CancelledError:
         if events is not None and events.last_type != "run_finished":
             events.emit("run_finished", status="stopped", reason="cancelled", message="The run was cancelled.")

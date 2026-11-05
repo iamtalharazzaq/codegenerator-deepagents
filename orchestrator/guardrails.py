@@ -1,6 +1,6 @@
 """Guardrails that are enforced in code, never only in a prompt.
 
-- `WriteScope` + `WriteScopeMiddleware`: a task may only write inside the paths its plan declared, never
+- `WriteScope`: a task may only write inside the paths its plan declared, never
   into `.git`, never outside the workspace, never a real `.env`, and within a size/file-count budget.
 - `writes_overlap`: the scheduler uses it to refuse running two tasks at once when their write areas overlap.
 - `machine_verdict`: for roles with an objective check (QA's tests, DevOps's build) the status is the real exit
@@ -10,26 +10,16 @@
 from __future__ import annotations
 
 import fnmatch
-import re
-from collections.abc import Awaitable, Callable
+import json
 from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
-
-from langchain.agents.middleware.types import AgentMiddleware
-from langchain_core.messages import ToolMessage
-from langgraph.prebuilt.tool_node import ToolCallRequest
-from langgraph.types import Command
 
 WRITE_TOOLS = ("write_file", "edit_file")
 # Any tool that takes a path may not touch `.git`: a blocked agent was seen listing every object folder in it.
 PATH_ARGS = ("file_path", "path")
 _ENV_OK_SUFFIXES = (".example", ".sample", ".template")
-_WILDCARDS = "*?["
 
-# role -> the sandbox tool whose real exit code decides the status
-MACHINE_CHECKS: dict[str, str] = {"qa_engineer": "run_tests", "devops_engineer": "run_build"}
-_EXIT_RE = re.compile(r"\Aexit (-?\d+)")
 
 
 def normalize_path(raw: str) -> str | None:
@@ -38,12 +28,6 @@ def normalize_path(raw: str) -> str | None:
     if any(p == ".." for p in parts):
         return None
     return "/".join(p for p in parts if p != ".")
-
-
-def _prefix(glob: str) -> str:
-    g = glob.strip().lstrip("/")
-    cut = min((g.find(c) for c in _WILDCARDS if c in g), default=len(g))
-    return g[:cut]
 
 
 def path_matches(path: str, globs: tuple[str, ...]) -> bool:
@@ -58,13 +42,6 @@ def path_matches(path: str, globs: tuple[str, ...]) -> bool:
         elif path == g or fnmatch.fnmatchcase(path, g):
             return True
     return False
-
-
-def writes_overlap(a: tuple[str, ...], b: tuple[str, ...]) -> bool:
-    """Conservative: an empty scope means "anywhere", so it overlaps everything."""
-    if not a or not b:
-        return True
-    return any(_prefix(x).startswith(_prefix(y)) or _prefix(y).startswith(_prefix(x)) for x in a for y in b)
 
 
 def forbidden_reason(path: str) -> str | None:
@@ -113,80 +90,40 @@ class WriteScope:
             self.written.add(path)
 
 
-BlockHandler = Callable[[str, str, str], None]  # (tool, path, reason)
+def tool_refusal(scope: WriteScope, name: str, args: dict[str, Any]) -> tuple[str, str] | None:
+    """(path, reason) when a tool call must be blocked, else None (and an allowed write is recorded).
 
-
-class WriteScopeMiddleware(AgentMiddleware[Any, Any, Any]):
-    """Refuses a write/edit call that breaks the task's `WriteScope` (the model sees the reason)."""
-
-    def __init__(self, scope: WriteScope, on_block: BlockHandler | None = None) -> None:
-        super().__init__()
-        self.scope = scope
-        self._on_block = on_block
-
-    @property
-    def name(self) -> str:
-        return "WriteScopeMiddleware"
-
-    def _blocked(self, call: Any, path: str, reason: str) -> ToolMessage:
-        self.scope.blocked += 1
-        if self._on_block is not None:
-            self._on_block(call["name"], path, reason)
-        return ToolMessage(
-            content=f"Blocked: {reason}. Do not retry this path; write only inside your task's scope.",
-            tool_call_id=call["id"],
-            status="error",
-        )
-
-    def _refusal(self, request: ToolCallRequest) -> ToolMessage | None:
-        call = request.tool_call
-        args = call.get("args") or {}
-        if call["name"] not in WRITE_TOOLS:
-            for key in PATH_ARGS:
-                value = args.get(key)
-                normalized = normalize_path(value) if isinstance(value, str) else None
-                if normalized is not None and ".git" in normalized.split("/"):
-                    return self._blocked(call, str(value), "the .git folder is not available")
-            return None
-        path = str(args.get("file_path") or args.get("path") or "")
-        body = args.get("content") if call["name"] == "write_file" else args.get("new_string", "")
-        reason = self.scope.check(path, len(str(body or "").encode("utf-8")))
-        if reason is None:
-            self.scope.record(path)
-            return None
-        return self._blocked(call, path, reason)
-
-    def wrap_tool_call(
-        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]
-    ) -> ToolMessage | Command[Any]:
-        return self._refusal(request) or handler(request)
-
-    async def awrap_tool_call(
-        self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]
-    ) -> ToolMessage | Command[Any]:
-        return self._refusal(request) or await handler(request)
-
-
-@dataclass(frozen=True)
-class ToolRecord:
-    name: str
-    args: dict[str, Any]
-    output: str = ""
-    error: bool = False
-
-
-def machine_verdict(role: str, calls: list[ToolRecord]) -> tuple[bool, str] | None:
-    """For QA/DevOps: (ok, reason) from the last real run of their sandbox tool; None when the role has no check.
-
-    No run at all is a failure: a pass is never trusted without an actual test/build run."""
-    tool = MACHINE_CHECKS.get(role)
-    if tool is None:
+    - any tool: never touches `.git` (a blocked agent was seen listing every object folder in it)
+    - write_file / edit_file: only inside the task's declared paths, never a real `.env`, within the size budgets"""
+    if name not in WRITE_TOOLS:
+        for key in PATH_ARGS:
+            value = args.get(key)
+            normalized = normalize_path(value) if isinstance(value, str) else None
+            if normalized is not None and ".git" in normalized.split("/"):
+                return str(value), "the .git folder is not available"
         return None
-    runs = [c for c in calls if c.name == tool and not c.error]
-    if not runs:
-        return False, f"{tool} was never run, so a pass cannot be trusted"
-    match = _EXIT_RE.match(runs[-1].output)
-    if match is None:
-        return False, f"{tool} returned no exit code"
-    code = int(match.group(1))
-    return (code == 0), f"{tool} exited {code}"
+    path = str(args.get("file_path") or args.get("path") or "")
+    body = args.get("content") if name == "write_file" else args.get("new_string", "")
+    reason = scope.check(path, len(str(body or "").encode("utf-8")))
+    if reason is None:
+        scope.record(path)
+        return None
+    return path, reason
+
+
+class CallTracker:
+    """Per-task loop detection: the same call over and over, too many calls, too many blocked writes."""
+
+    def __init__(self, max_calls: int) -> None:
+        self.max_calls = max_calls
+        self.calls = 0
+        self.repeats: dict[str, int] = {}
+
+    def note(self, name: str, args: dict[str, Any]) -> None:
+        self.calls += 1
+        if self.calls > self.max_calls:
+            raise AgentStuck(f"used more than {self.max_calls} tool calls")
+        key = f"{name}:{json.dumps(args, sort_keys=True, default=str)[:400]}"
+        self.repeats[key] = self.repeats.get(key, 0) + 1
+        if self.repeats[key] > MAX_REPEATED_CALLS:
+            raise AgentStuck(f"repeated the same {name} call {self.repeats[key]} times")

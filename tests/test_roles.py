@@ -12,10 +12,10 @@ def test_all_roles_load_with_nonempty_prompt_and_tools():
         assert 0 < len(role.prompt) < 1500
 
 
-def test_project_manager_has_planning_tools():
+def test_project_manager_plans_and_delegates_but_cannot_write_files():
     role = load_role("project_manager")
-    assert "write_file" in role.tools
-    assert "read_file" in role.tools
+    assert {"write_todos", "task", "read_file", "ls"} <= set(role.tools)
+    assert "write_file" not in role.tools and "edit_file" not in role.tools
 
 
 def test_qa_and_devops_reference_sandbox_tools():

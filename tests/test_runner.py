@@ -8,7 +8,7 @@ from orchestrator.events import EventLog
 from orchestrator.runner import (
     prepare_workspace,
     read_meta,
-    reopen_for_resume,
+    resume_note,
     run_graph,
     write_meta,
 )
@@ -42,20 +42,19 @@ def test_meta_round_trips_and_merges(tmp_path: Path):
     assert meta["status"] == "passed" and meta["request"] == "x" and meta["project"] == "p1"
 
 
-def test_resume_gives_an_escalated_task_a_fresh_budget_and_unblocks_dependents():
-    log = TaskLog("r1", "x", [mk("escalated", id="a", attempt=2, reason="boom", reasons=["boom", "boom"]),
-                              mk("blocked", id="b", reason="depends on a"), mk("pass", id="c")])
-    assert reopen_for_resume(log, "use pytest -x") == "plan"
-    a, b, c = log.tasks
-    assert (a.status, a.attempt, a.reasons) == ("fail", 0, [])
-    assert (b.status, b.reason, c.status) == ("pending", "", "pass")
-    assert "boom" in log.last_failure and "use pytest -x" in log.last_failure
+def test_resume_note_tells_the_project_manager_what_passed_and_what_failed():
+    log = TaskLog("r1", "x", [mk("pass", id="a", reason="done"), mk("fail", id="b", reason="tests red"),
+                              mk("in_progress", id="c")])
+    note = resume_note(log, "use pytest -x", "A task failed its last attempt.")
+    assert "passed: qa_engineer: o" in note and "FAILED: qa_engineer: o | reason: tests red" in note
+    assert "interrupted before it finished" in note  # a delegation cut off mid-run counts as failed
+    assert "A task failed its last attempt." in note and "Guidance from the person: use pytest -x" in note
+    assert log.tasks[2].status == "fail"
 
 
-def test_resuming_an_interrupted_run_goes_straight_back_to_work():
-    log = TaskLog("r1", "x", [mk("in_progress", id="a"), mk("pending", id="b")])
-    assert reopen_for_resume(log) == "act"
-    assert log.tasks[0].status == "pending"
+def test_resume_note_without_history_or_guidance_is_still_a_clear_instruction():
+    note = resume_note(TaskLog("r1", "x", []))
+    assert "stopped earlier" in note and "final status block" in note and "Guidance" not in note
 
 
 async def test_an_unexpected_crash_still_ends_the_run_with_an_event(tmp_path: Path):
@@ -63,7 +62,7 @@ async def test_an_unexpected_crash_still_ends_the_run_with_an_event(tmp_path: Pa
     ws.create()
     events = EventLog(tmp_path / "e.jsonl")
     # The model has nothing to say, so the graph raises on its first call.
-    state = {"request": "x", "workspace": ws, "run_id": "r1", "model": EmptyModel(messages=iter([])), "last_failure": None,
+    state = {"request": "x", "workspace": ws, "run_id": "r1", "model": EmptyModel(messages=iter([])),
              "task_log": TaskLog("r1", "x", []), "events": events}
     await run_graph(state)  # must not raise
     last = events.since(0)[-1]

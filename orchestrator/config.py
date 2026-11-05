@@ -7,24 +7,17 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RunConfig:
-    # Scheduling: how many tasks may run at once. 1 until the model server has more slots
-    # (codewright's `max_parallel_llm_jobs`); sandbox runs overlap even at 1.
+    # How many delegations may run at once. 1 until the model server has more slots (codewright's
+    # `max_parallel_llm_jobs`); the Project Manager may ask for several, the rest wait their turn.
     concurrency: int = 1
-    # Loop limits (first one reached ends the run).
-    max_attempts: int = 2  # per task, counted across roles
-    max_total_dispatches: int = 20
-    max_replans: int = 3
-    max_plan_attempts: int = 2  # unparseable/invalid plans in a row
+    # Safety limits. They are not a loop: the Project Manager decides what to do next, these only stop a runaway.
+    max_total_dispatches: int = 20  # delegations in one run
     run_timeout_s: float = 3600.0
     task_timeout_s: float = 600.0
+    max_tool_calls_per_task: int = 100  # a specialist stuck in a loop is stopped well before the task timeout
+    max_pm_steps: int = 400  # LangGraph steps for the whole team (the model and tool steps count separately)
     # Per-task write budgets (guardrails).
     max_file_bytes: int = 200_000
     max_files_per_task: int = 30
-    # LangGraph counts the model step and the tool step separately, so 200 is about 100 tool calls. (60 killed a real
-    # backend task right after it had written all its files.) Stuck detection and the task timeout are the real brakes.
-    max_agent_steps: int = 200
-    # Switches.
-    plan_approval: bool = False  # the API turns this on by default
-    report_summary: bool = False  # ask the Project Manager for a short summary paragraph in report.md
-    # Failure text fed back to the planner is capped: the model's context is small (4096 tokens).
-    max_failure_chars: int = 1500
+    # Hold the first delegation until the person approves the plan (the API turns this on by default).
+    plan_approval: bool = False

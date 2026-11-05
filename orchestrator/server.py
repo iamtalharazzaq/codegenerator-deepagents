@@ -29,17 +29,17 @@ from pydantic import BaseModel, Field
 from orchestrator.config import RunConfig
 from orchestrator.delivery import build_zip
 from orchestrator.events import EventLog
-from orchestrator.graph import OrchestratorState
 from orchestrator.runner import (
     prepare_workspace,
     read_meta,
-    reopen_for_resume,
+    resume_note,
     run_graph,
     run_path,
     write_meta,
 )
 from orchestrator.secrets import scan_secrets
 from orchestrator.task import TaskLog, load_task_log
+from orchestrator.team import OrchestratorState
 
 RUN_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 PROJECT_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
@@ -138,9 +138,7 @@ def create_app(
         return any(h.active and h.workspace.path.name == project for h in handles.values())
 
     def run_config(concurrency: int | None, plan_approval: bool) -> RunConfig:
-        return RunConfig(
-            concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval, report_summary=True
-        )
+        return RunConfig(concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval)
 
     async def execute(handle: RunHandle, state: OrchestratorState) -> None:
         sandbox = state.get("sandbox_client")
@@ -203,7 +201,7 @@ def create_app(
         state: OrchestratorState = {
             "request": body.request, "workspace": ws, "run_id": run_id, "model": model_factory(),
             "sandbox_client": sandbox_factory(), "task_log": TaskLog(run_id=run_id, request=body.request, tasks=[]),
-            "last_failure": None, "config": config_, "events": events, "base_commit": base,
+            "config": config_, "events": events, "base_commit": base,
         }
         launch(handle, state)
         return {"run_id": run_id, "project": project}
@@ -306,7 +304,7 @@ def create_app(
         if project_busy(ws.path.name):
             raise HTTPException(409, f"Project {ws.path.name!r} already has a run in progress.")
         log = load_task_log(run_path(ws, run_id) / "task_log.json")
-        start_at = reopen_for_resume(log, body.guidance)
+        note = resume_note(log, body.guidance, meta.get("reason"))
         handle = handles.get(run_id) or RunHandle(run_id, ws, EventLog(run_path(ws, run_id) / "events.jsonl"))
         handles[run_id] = handle
         try:
@@ -315,14 +313,14 @@ def create_app(
             pass
         config_ = run_config(meta.get("concurrency"), False)
         write_meta(ws, run_id, status="running", reason=None)
-        handle.events.emit("run_resumed", run_id=run_id, guidance=body.guidance or "", start_at=start_at)
+        handle.events.emit("run_resumed", run_id=run_id, guidance=body.guidance or "")
         state: OrchestratorState = {
             "request": log.request, "workspace": ws, "run_id": run_id, "model": model_factory(),
-            "sandbox_client": sandbox_factory(), "task_log": log, "last_failure": log.last_failure,
-            "config": config_, "events": handle.events, "base_commit": meta.get("base_commit"), "start_at": start_at,
+            "sandbox_client": sandbox_factory(), "task_log": log,
+            "config": config_, "events": handle.events, "base_commit": meta.get("base_commit"), "resume_note": note,
         }
         launch(handle, state)
-        return {"run_id": run_id, "start_at": start_at}
+        return {"run_id": run_id}
 
     @app.post("/api/runs/{run_id}/cancel")
     async def cancel_run(run_id: str) -> dict[str, bool]:

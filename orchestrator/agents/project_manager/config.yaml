@@ -1,3 +1,3 @@
 name: project-manager
-description: Main planning agent. Reads requests and workspace state, plans ordered tasks for the sub-agent roster, dispatches them, checks results, replans on failure, and writes the final report.
-tools: [ls, read_file, write_file]
+description: Main agent. Reads the request, keeps a to-do list, delegates to the specialists with the task tool, reads their results, retries or changes approach on failure, and ends with a final status block.
+tools: [ls, read_file, write_todos, task]
