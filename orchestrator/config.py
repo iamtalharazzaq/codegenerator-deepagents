@@ -19,5 +19,8 @@ class RunConfig:
     # Per-task write budgets (guardrails).
     max_file_bytes: int = 200_000
     max_files_per_task: int = 30
+    # If the Project Manager ends its turn without having delegated anything (a small model may "finish" the work in
+    # words), ask it once to delegate. It is a nudge, not a loop: the Project Manager still decides everything.
+    max_nudges: int = 1
     # Hold the first delegation until the person approves the plan (the API turns this on by default).
     plan_approval: bool = False

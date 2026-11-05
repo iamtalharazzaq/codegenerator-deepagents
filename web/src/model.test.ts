@@ -173,6 +173,12 @@ describe("reducer", () => {
     expect(progress(s)).toEqual({ done: 1, total: 2 });
   });
 
+  it("shows when the Project Manager had to be asked to delegate", () => {
+    seq = 0;
+    const s = applyEvent(emptyRun(), ev("pm_nudged", { message: "x" }));
+    expect(s.chat.at(-1)).toMatchObject({ kind: "note", tone: "warn" });
+  });
+
   it("keeps the event log bounded", () => {
     seq = 0;
     let s = emptyRun();

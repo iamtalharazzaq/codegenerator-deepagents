@@ -34,7 +34,7 @@ from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import TodoListMiddleware
 from langchain.agents.middleware.types import AgentMiddleware
 from langchain_core.language_models import BaseChatModel
-from langchain_core.messages import ToolMessage
+from langchain_core.messages import HumanMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
@@ -91,6 +91,11 @@ REASONS = {
     "run_timeout": "The run hit its time limit.",
     "step_limit": "The Project Manager ran out of steps.",
 }
+
+NUDGE = (
+    "You ended without delegating any work. You cannot create or edit files yourself, so nothing has been done. "
+    "Delegate each item of your to-do list now with the `task` tool (include the WRITES line), then report."
+)
 
 Status = Literal["passed", "escalated", "stopped"]
 ApproveFn = Callable[[dict[str, Any]], Awaitable[bool]]
@@ -573,15 +578,23 @@ async def run_team(state: OrchestratorState) -> OrchestratorState:
     ctx.emit("plan_started")
     agent = build_team(ctx)
     final_text, error_reason = "", None
-    try:
-        result = await asyncio.wait_for(
-            agent.ainvoke(
-                {"messages": [{"role": "user", "content": first_message(state)}]},
-                config={"recursion_limit": ctx.cfg.max_pm_steps},
-            ),
-            ctx.cfg.run_timeout_s,
+    async def drive() -> str:
+        result = await agent.ainvoke(
+            {"messages": [{"role": "user", "content": first_message(state)}]},
+            config={"recursion_limit": ctx.cfg.max_pm_steps},
         )
-        final_text = result_text(result["messages"][-1])
+        for _ in range(ctx.cfg.max_nudges):
+            if ctx.dispatches > 0 or ctx.rejected:
+                break
+            ctx.emit("pm_nudged", message="The Project Manager ended without delegating anything; asking it to delegate.")
+            result = await agent.ainvoke(
+                {"messages": [*result["messages"], HumanMessage(content=NUDGE)]},
+                config={"recursion_limit": ctx.cfg.max_pm_steps},
+            )
+        return result_text(result["messages"][-1])
+
+    try:
+        final_text = await asyncio.wait_for(drive(), ctx.cfg.run_timeout_s)
     except TimeoutError:
         error_reason = "run_timeout"
     except GraphRecursionError:

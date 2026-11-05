@@ -207,6 +207,8 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       return { ...s, awaitingApproval: false, pm: "idle" };
     case "plan_rejected":
       return { ...s, awaitingApproval: false, chat: [...s.chat, { kind: "note", tone: "info", text: "You rejected the plan." }] };
+    case "pm_nudged":
+      return { ...s, chat: [...s.chat, { kind: "note", tone: "warn", text: "The Project Manager ended without delegating anything, so it was asked once to delegate." }] };
     case "plan_warning":
       return { ...s, chat: [...s.chat, { kind: "note", tone: "warn", text: e.message }] };
     case "task_started": {

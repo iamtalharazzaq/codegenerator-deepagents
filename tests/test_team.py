@@ -110,7 +110,7 @@ async def test_the_project_manager_cannot_write_files_itself(tmp_path):
         calls(tc("write_file", {"file_path": "/hack.py", "content": "x"})),
         AIMessage(content="Gave up.\n---\nstatus: fail\nreason: nothing delegated\n---"),
     ]
-    ws, _, result = await run(tmp_path, script)
+    ws, _, result = await run(tmp_path, script, cfg=RunConfig(max_nudges=0))
     assert not (ws.work / "hack.py").exists() and result["status"] == "escalated"
 
 
@@ -195,7 +195,7 @@ async def test_a_specialist_outside_the_roster_is_refused_and_so_is_general_purp
         delegate("general-purpose", "Write /loose.txt.", "k2"),
         AIMessage(content="Nothing done.\n---\nstatus: fail\nreason: nothing passed\n---"),
     ]
-    ws, events, result = await run(tmp_path, script, model=Spy(messages=iter(script)))
+    ws, events, result = await run(tmp_path, script, cfg=RunConfig(max_nudges=0), model=Spy(messages=iter(script)))
     assert not (ws.work / "loose.txt").exists() and "task_started" not in types(events) and result["task_log"].tasks == []
     refusals = {m for m in seen if "Unknown sub-agent" in m}
     assert len(refusals) == 2 and all("backend-developer" in m for m in refusals)  # each names the real roster
@@ -262,7 +262,7 @@ async def test_a_rejected_plan_delegates_nothing_and_the_run_is_stopped(tmp_path
     ],
 )
 async def test_the_final_status_rules(tmp_path, final, status, reason):
-    _, events, result = await run(tmp_path, [AIMessage(content=final)])
+    _, events, result = await run(tmp_path, [AIMessage(content=final)], cfg=RunConfig(max_nudges=0))
     assert (result["status"], result["end_reason"]) == (status, reason)
     assert types(events)[-1] == "run_finished" and not (tmp_path / "p1" / "runs" / "r1" / "delivery.zip").exists()
 
@@ -301,7 +301,7 @@ async def test_a_resumed_run_tells_the_project_manager_what_already_happened(tmp
             return await super()._agenerate(messages, stop, run_manager, **kwargs)
 
     note = "This run was stopped earlier.\n- passed: backend_developer: Build API\nGuidance from the person: skip the UI"
-    await run(tmp_path, [AIMessage(content=PASS)], note=note, model=Spy(messages=iter([AIMessage(content=PASS)])))
+    await run(tmp_path, [AIMessage(content=PASS)], note=note, cfg=RunConfig(max_nudges=0), model=Spy(messages=iter([AIMessage(content=PASS)])))
     assert "Request:\nbuild it" in seen[0] and "passed: backend_developer: Build API" in seen[0] and "skip the UI" in seen[0]
 
 
@@ -382,3 +382,34 @@ async def test_what_the_project_manager_says_alongside_a_tool_call_becomes_a_pm_
     finished = next(e for e in events.since(0) if e["type"] == "run_finished")
     assert finished["summary"] == "Done."  # the final reply without its status block
     assert types(events).index("pm_said") < types(events).index("task_started")
+
+
+async def test_a_project_manager_that_ends_without_delegating_is_nudged_once_and_then_does_the_work(tmp_path):
+    """Seen with the real 9B model: it wrote a to-do list, marked it done, and claimed files it cannot create."""
+    script = [
+        AIMessage(content="I have created both files.\n---\nstatus: pass\nreason: done\n---"),  # no delegation at all
+        delegate("backend-developer", "Create a/x.py.\nWRITES: a/**"),
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),
+        AIMessage(content=PASS),
+        AIMessage(content="Now it is really done.\n---\nstatus: pass\nreason: all passed\n---"),
+    ]
+    ws, events, result = await run(tmp_path, script)
+    assert result["status"] == "passed" and (ws.work / "a" / "x.py").exists()
+    order = types(events)
+    assert order.count("pm_nudged") == 1 and order.index("pm_nudged") < order.index("task_started")
+
+
+async def test_the_nudge_happens_only_once_and_a_false_claim_still_fails_the_run(tmp_path):
+    script = [
+        AIMessage(content="Created them.\n---\nstatus: pass\nreason: done\n---"),
+        AIMessage(content="Really, they exist.\n---\nstatus: pass\nreason: done\n---"),
+    ]
+    _, events, result = await run(tmp_path, script)
+    assert types(events).count("pm_nudged") == 1
+    assert (result["status"], result["end_reason"]) == ("escalated", "no_task_passed")
+
+
+async def test_no_nudge_when_the_work_was_delegated(tmp_path):
+    script = [delegate("backend-developer", "Do it.\nWRITES: a/**"), AIMessage(content=PASS), AIMessage(content=PASS)]
+    _, events, _ = await run(tmp_path, script)
+    assert "pm_nudged" not in types(events)

@@ -9,7 +9,7 @@ def test_all_roles_load_with_nonempty_prompt_and_tools():
         assert role.folder == folder
         assert role.name and role.description
         assert len(role.tools) > 0
-        assert 0 < len(role.prompt) < 1500
+        assert 0 < len(role.prompt) < 2400  # the Project Manager's is the longest: it must be explicit for a small model
 
 
 def test_project_manager_plans_and_delegates_but_cannot_write_files():
