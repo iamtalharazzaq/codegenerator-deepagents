@@ -100,9 +100,8 @@ class DemoModel(BaseChatModel):
                     _task("qa", "qa_engineer", "Re-run the flow tests after the fix", ["tests/**"], ["fix"]),
                 ],
             )
-        request = prompt.split("Roles you can assign")[0].replace("Request:", "").strip()[:80]
         return _plan_reply(
-            f"I split this into six tasks: understand the code, design it, then database, backend and frontend side by side, then test. ({request})",
+            "I split this into six tasks: understand the code, design it, then database, backend and frontend side by side, then test.",
             [
                 _task("map", "code_analyst", "Map the existing code this change touches", ["docs/map.md"]),
                 _task("design", "solution_architect", "Write the design: boundaries, data flow, endpoints", ["docs/design.md"], ["map"]),
