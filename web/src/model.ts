@@ -94,8 +94,15 @@ export interface Finished {
   seconds: number;
 }
 
+export interface Review {
+  round: number;
+  summary: string;
+  files: string[];
+}
+
 export interface RunView {
   runId: string | null;
+  review: Review | null; // the finished work, waiting for the person to accept it or ask for changes
   project: string;
   request: string;
   status: RunStatus;
@@ -126,7 +133,7 @@ export interface RunView {
 export function emptyRun(): RunView {
   return {
     runId: null, project: "", request: "", status: "idle", pm: "idle", check: null, tasks: [], todos: [],
-    todoChanges: [], pmNotes: [], chat: [], guardrails: [], pulses: [], awaitingApproval: false, dispatches: 0, maxDispatches: 20,
+    review: null, todoChanges: [], pmNotes: [], chat: [], guardrails: [], pulses: [], awaitingApproval: false, dispatches: 0, maxDispatches: 20,
     concurrency: 1, zip: null, secretBlock: null, finished: null, log: [], lastSaid: "", startedAt: 0, endedAt: null,
     lastEvent: "", lastSeq: 0,
   };
@@ -208,6 +215,12 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       return { ...s, awaitingApproval: false, pm: "idle" };
     case "plan_rejected":
       return { ...s, awaitingApproval: false, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "info", text: "You rejected the plan." }] };
+    case "review_requested":
+      return { ...s, review: { round: e.round ?? 1, summary: e.summary ?? "", files: e.files ?? [] }, pm: "approval" };
+    case "review_accepted":
+      return { ...s, review: null, pm: "idle" };
+    case "review_changes_requested":
+      return { ...s, review: null, pm: "idle", chat: [...s.chat, { kind: "user", seq: e.seq, text: e.text }] };
     case "pm_nudged":
       return { ...s, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: "The Project Manager ended without delegating anything, so it was asked once to delegate." }] };
     case "plan_warning":
@@ -247,7 +260,7 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       const passed = status === "passed";
       const finished: Finished = { status, reason: e.reason ?? "", message: e.message ?? "", summary: e.summary ?? "", seconds: e.seconds ?? 0 };
       return {
-        ...s, status, pm: passed ? "done" : "stopped", awaitingApproval: false, finished, endedAt: e.ts,
+        ...s, status, pm: passed ? "done" : "stopped", awaitingApproval: false, review: null, finished, endedAt: e.ts,
         tasks: s.tasks.map((t) => (t.status === "in_progress" ? { ...t, status: "fail", endSeq: e.seq, endTs: e.ts } : t)),
       };
     }
@@ -420,6 +433,7 @@ export function feed(view: RunView): FeedItem[] {
 export function nowLine(view: RunView): { ui: UiStatus; text: string } | null {
   if (view.status !== "running") return null;
   if (view.awaitingApproval) return { ui: "blocked", text: "Waiting for your approval of the plan" };
+  if (view.review) return { ui: "blocked", text: "Waiting for your review before the zip is built" };
   const running = view.tasks.filter((t) => t.status === "in_progress");
   if (running.length) {
     const first = running[0];

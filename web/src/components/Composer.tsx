@@ -12,7 +12,7 @@ interface Props {
   value: string;
   onChange: (v: string) => void;
   busy: boolean;
-  onStart: (text: string, approvePlan: boolean, concurrency: number, project: string | null) => void;
+  onStart: (text: string, approvePlan: boolean, concurrency: number, project: string | null, finalReview: boolean) => void;
   onResume: (text: string) => void;
   onCancel: () => void;
   onNew: () => void;
@@ -21,6 +21,7 @@ interface Props {
 /** One box with three honest modes: start a run, give guidance for the next attempt, or locked with the reason why. */
 export function Composer({ view, projects, config, selected, value, onChange, busy, onStart, onResume, onCancel, onNew }: Props) {
   const [approvePlan, setApprovePlan] = useState(true);
+  const [finalReview, setFinalReview] = useState(true);
   const [concurrency, setConcurrency] = useState(1);
   const [project, setProject] = useState("");
   const resumable = !!selected && isResumable(view.status);
@@ -30,11 +31,13 @@ export function Composer({ view, projects, config, selected, value, onChange, bu
   const submit = () => {
     if (busy || locked) return;
     if (resumable) onResume(value.trim());
-    else if (value.trim()) onStart(value.trim(), approvePlan, concurrency, project || config?.default_project || null);
+    else if (value.trim()) onStart(value.trim(), approvePlan, concurrency, project || config?.default_project || null, finalReview);
   };
   const label = resumable ? "Guidance for the next attempt" : running ? "Run in progress" : finishedOk ? "Run finished" : "What should be built?";
   const help = resumable
     ? "Sending resumes this run. The Project Manager is told what passed and what failed, keeps the passed work, and tries the failed work again with your note. This uses the model."
+    : view.review
+      ? "The work is finished and waiting for your review. Use the card on the right to deliver it or ask for changes."
     : running
       ? "The run is working. You can cancel it, or wait for it to finish."
       : finishedOk
@@ -53,6 +56,7 @@ export function Composer({ view, projects, config, selected, value, onChange, bu
       {!resumable && !locked && (
         <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1.5 text-[13px] text-fg-2">
           <label className="inline-flex items-center gap-2"><input type="checkbox" checked={approvePlan} onChange={(e) => setApprovePlan(e.target.checked)} />Ask me to approve the plan</label>
+          <label className="inline-flex items-center gap-2"><input type="checkbox" checked={finalReview} onChange={(e) => setFinalReview(e.target.checked)} />Ask me to review before the zip</label>
           <label className="inline-flex items-center gap-2">Project
             <select value={project} onChange={(e) => setProject(e.target.value)} aria-describedby="project-help" className="max-w-[210px] rounded-md border border-control bg-page px-1.5 py-0.5 text-fg">
               <option value="">New project (empty)</option>

@@ -118,7 +118,7 @@ function passed(): RunEvent[] {
   return log.events;
 }
 
-export type MockName = "escalated" | "running" | "passed" | "planning" | "approval";
+export type MockName = "escalated" | "running" | "passed" | "planning" | "approval" | "review";
 
 function planning(withPlan: boolean): RunEvent[] {
   const log = new Log();
@@ -142,7 +142,17 @@ function endNow(events: RunEvent[]): RunEvent[] {
   }));
 }
 
+function review(): RunEvent[] {
+  const all = passed();
+  const cut = all.findIndex((e) => e.type === "report_ready");
+  const log = new Log();
+  log.seq = all[cut - 1].seq; log.at = all[cut - 1].ts; log.events = all.slice(0, cut);
+  log.emit("review_requested", 1, { round: 1, summary: "greet.py returns \"Hello, <name>!\" and 15 pytest tests pass.", files: ["greet.py", "test_greet.py", "docs/interface.md"] });
+  return log.events;
+}
+
 export function mockEvents(name: MockName): RunEvent[] {
+  if (name === "review") return endNow(review());
   if (name === "planning") return endNow(planning(false));
   if (name === "approval") return endNow(planning(true));
   if (name === "passed") return passed();
@@ -170,6 +180,6 @@ export function mockRuns(): RunRow[] {
 
 export function mockFromUrl(search: string): MockName | null {
   const value = new URLSearchParams(search).get("mock");
-  const names = ["escalated", "running", "passed", "planning", "approval"];
+  const names = ["escalated", "running", "passed", "planning", "approval", "review"];
   return value !== null && names.includes(value) ? (value as MockName) : value === "" ? "escalated" : null;
 }

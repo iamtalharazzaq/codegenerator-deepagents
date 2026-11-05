@@ -32,6 +32,14 @@ Guardrails enforced in code: tool allowlist per role; per-task write scope (neve
 and file-count budgets); QA/DevOps status comes from the real exit code of `run_tests` / `run_build`; secret scan
 blocks the zip; a plan can be held for approval.
 
+## Final review
+
+When all tasks have passed, the run pauses before building the zip and asks the person whether anything should change
+("Ready to deliver" card: summary, the files that will be in the zip, a box for changes). "Deliver the zip" builds the
+zip. "Request changes" sends the note to the Project Manager, which delegates the extra work and the person is asked
+again (up to 5 rounds). A run that did not pass is never sent for review. It is on by default in the web UI
+(`final_review`), off in the CLI unless `--review` is given.
+
 ## Projects
 
 Every run gets its own new project folder by default (named from the request, for example

@@ -184,6 +184,14 @@ Usage:
 ~~~text
 You ended without delegating any work. You cannot create or edit files yourself, so nothing has been done. Delegate each item of your to-do list now with the `task` tool (include the WRITES line), then report.
 ~~~
+- **Change request after the final review** (the person asked for changes before the zip):
+
+~~~text
+The person reviewed the finished work and asks for changes:
+{changes}
+
+Delegate whatever work is needed to make those changes (include the WRITES line), read the results, then report again with a short summary and a final status block.
+~~~
 - **Unknown specialist:** `Unknown sub-agent '<name>'. Use one of: <the ten names>.`
 - **Delegation limit:** `Delegation limit reached. Delegate nothing more: end now with a short summary and a final status block (status: fail unless every needed task already passed).`
 - **Plan rejected:** `The person rejected the plan. Delegate nothing: end with status: fail, reason: plan rejected.`

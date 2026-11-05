@@ -13,6 +13,7 @@ Nothing is said twice. Each fact has exactly one place:
 | The plan, and the Project Manager's reasoning | the Plan card (checklist, approval buttons, History) |
 | What each specialist did, and why it failed | one task card in the Activity feed, updated in place |
 | What stopped the run, and the next step | the Blocker card (shown only when stuck; it names the task, the reason stays on the task card) |
+| The last check before delivery | the Review card ("Ready to deliver": summary, files, "Anything to change?"); the zip does not exist until the person accepts |
 | What you get | the Result card (summary, zip, full report on demand) |
 | Debugging detail | the Event log drawer |
 

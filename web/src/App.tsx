@@ -10,6 +10,7 @@ import { HubView } from "./components/HubView";
 import { NowLine } from "./components/NowLine";
 import { PlanCard } from "./components/PlanCard";
 import { ResultCard } from "./components/ResultCard";
+import { ReviewCard } from "./components/ReviewCard";
 import { RunList } from "./components/RunList";
 import { mockFromUrl, mockRuns, mockView, type MockName } from "./mock";
 import { attention, latestTask } from "./model";
@@ -78,11 +79,11 @@ export default function App() {
     setFocus(null);
   };
   const newRun = () => { setSelected(null); setDraft(""); setFocus(null); focusGuidance(); };
-  const start = async (text: string, approvePlan: boolean, concurrency: number, project: string | null) => {
+  const start = async (text: string, approvePlan: boolean, concurrency: number, project: string | null, finalReview: boolean) => {
     if (blockedByMock()) return;
     setBusy(true);
     try {
-      const r = await api.start({ request: text, plan_approval: approvePlan, concurrency, ...(project ? { project } : {}) });
+      const r = await api.start({ request: text, plan_approval: approvePlan, final_review: finalReview, concurrency, ...(project ? { project } : {}) });
       setSelected(r.run_id); setDraft(""); void refresh();
     } catch (e) { fail(e); } finally { setBusy(false); }
   };
@@ -94,6 +95,7 @@ export default function App() {
       setDraft(""); setRestart((n) => n + 1);
     } catch (e) { fail(e); } finally { setBusy(false); }
   };
+  const review = (accept: boolean, changes: string) => { if (!blockedByMock() && selected) api.review(selected, accept, changes).catch(fail); };
   const decide = (approved: boolean) => { if (!blockedByMock() && selected) api.approve(selected, approved).catch(fail); };
   const cancel = () => { if (!blockedByMock() && selected) api.cancel(selected).catch(fail); };
 
@@ -108,6 +110,7 @@ export default function App() {
   );
   const plan = (
     <>
+      {view.review && <ReviewCard key={view.review.round} review={view.review} onDecide={review} />}
       <ResultCard view={view} />
       <PlanCard view={view} onApprove={decide} onOpenRole={showRole} />
     </>

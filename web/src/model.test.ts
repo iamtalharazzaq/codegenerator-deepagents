@@ -221,6 +221,23 @@ describe("reducer", () => {
     expect(end.todos.map((t) => todoUi(end, t))).toEqual(["passed", "passed"]); // a passed run never shows leftover Blocked items
   });
 
+  it("the final review: waits for the person, and a change request becomes a message in the feed", () => {
+    const s = mockView("review");
+    expect(s.status).toBe("running");
+    expect(s.review).toMatchObject({ round: 1, files: ["greet.py", "test_greet.py", "docs/interface.md"] });
+    expect(s.zip).toBeNull(); // nothing is delivered before the person decides
+    expect(nowLine(s)).toEqual({ ui: "blocked", text: "Waiting for your review before the zip is built" });
+    seq = s.lastSeq;
+    const asked = applyEvent(s, ev("review_changes_requested", { round: 1, text: "also add a README" }));
+    expect(asked.review).toBeNull();
+    expect(feed(asked).at(-1)).toMatchObject({ kind: "user", text: "also add a README" });
+    const second = applyEvent(asked, ev("review_requested", { round: 2, summary: "Added a README.", files: ["README.md"] }));
+    expect(second.review?.round).toBe(2);
+    const accepted = applyEvent(second, ev("review_accepted", { round: 2 }));
+    expect(accepted.review).toBeNull();
+    expect(applyEvent(second, ev("run_finished", { status: "passed", reason: "all_passed", message: "ok" })).review).toBeNull();
+  });
+
   it("shows when the Project Manager had to be asked to delegate", () => {
     seq = 0;
     const s = applyEvent(emptyRun(), ev("pm_nudged", { message: "x" }));

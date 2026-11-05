@@ -1,6 +1,6 @@
 import { formatDuration, isResumable, progress, type RunView } from "../model";
 import { Button, CopyButton, Meter, useNow } from "../ui/bits";
-import { RunStatusChip } from "../ui/Status";
+import { RunStatusChip, StatusChip } from "../ui/Status";
 
 /** Run status, progress, and the one primary action when the run is stuck. Each fact appears here once. */
 export function Header({ view, demo, mock, onResume }: { view: RunView; demo: boolean; mock: boolean; onResume: () => void }) {
@@ -21,7 +21,9 @@ export function Header({ view, demo, mock, onResume }: { view: RunView; demo: bo
       </div>
       {!empty && (
         <div className="mt-3 flex flex-wrap items-center gap-x-6 gap-y-3">
-          <RunStatusChip status={view.status} />
+          {view.status === "running" && (view.review || view.awaitingApproval)
+            ? <StatusChip status="blocked" label="Waiting for you" size="lg" />
+            : <RunStatusChip status={view.status} />}
           {total > 0 && <Meter label="Tasks" value={done} max={total} text={`${done}/${total}`} tone="passed" />}
           <p className={`text-[13px] tabular-nums ${used >= 1 ? "text-escalated" : used >= 0.75 ? "text-blocked" : "text-fg-2"}`}>{view.dispatches}/{view.maxDispatches} dispatches</p>
           <p className="text-[13px] tabular-nums text-fg-2">{formatDuration(elapsed)}</p>

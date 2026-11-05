@@ -25,6 +25,7 @@ export interface StartBody {
   request: string;
   project?: string;
   plan_approval: boolean;
+  final_review?: boolean;
   concurrency?: number;
 }
 
@@ -51,6 +52,7 @@ export const api = {
   runs: () => call<RunRow[]>("/api/runs"),
   projects: () => call<ProjectRow[]>("/api/projects"),
   start: (body: StartBody) => post<{ run_id: string; project: string }>("/api/runs", body),
+  review: (id: string, accept: boolean, changes: string) => post<{ ok: boolean }>(`/api/runs/${id}/review`, { accept, changes }),
   approve: (id: string, approved: boolean) => post<{ ok: boolean }>(`/api/runs/${id}/approve`, { approved }),
   resume: (id: string, guidance: string) => post<{ run_id: string }>(`/api/runs/${id}/resume`, { guidance: guidance || null }),
   cancel: (id: string) => post<{ ok: boolean }>(`/api/runs/${id}/cancel`),

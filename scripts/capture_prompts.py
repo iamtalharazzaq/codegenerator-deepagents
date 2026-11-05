@@ -60,6 +60,9 @@ for who, system, msgs, tools in CAPTURED:
 out.append("\n---\n\n## Messages our code writes to the model\n")
 out.append("- **Resume note** (first message of a resumed run, built by `resume_note` in `orchestrator/runner.py`): \"This run was stopped earlier. … Work so far (do not redo what passed): … Guidance from the person: … Carry on from here: fix or redo only what is needed, then finish with the final status block.\"")
 out.append(f"- **Nudge** (when the Project Manager ends without delegating):\n\n~~~text\n{NUDGE}\n~~~")
+from orchestrator.team import REVIEW_CHANGES
+
+out.append(f"- **Change request after the final review** (the person asked for changes before the zip):\n\n~~~text\n{REVIEW_CHANGES}\n~~~")
 out.append("- **Unknown specialist:** `Unknown sub-agent '<name>'. Use one of: <the ten names>.`")
 out.append("- **Delegation limit:** `Delegation limit reached. Delegate nothing more: end now with a short summary and a final status block (status: fail unless every needed task already passed).`")
 out.append("- **Plan rejected:** `The person rejected the plan. Delegate nothing: end with status: fail, reason: plan rejected.`")
