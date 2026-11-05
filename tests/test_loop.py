@@ -315,3 +315,19 @@ async def test_events_tell_the_story_in_order(tmp_path, monkeypatch):
     assert order.index("task_started") < order.index("task_finished") < order.index("run_finished")
     started = next(e for e in result["events"].since(0) if e["type"] == "task_started")
     assert started["task"]["status"] == "in_progress" and started["task"]["attempt"] == 1  # emitted *before* the work
+
+
+async def test_a_new_prerequisite_in_a_replan_does_not_trigger_another_replan(tmp_path, monkeypatch):
+    """Regression: the retried task used to keep status 'fail', so when the new prerequisite passed the router saw
+    a 'fail' and replanned from scratch again, looping until the dispatch cap."""
+    answers = iter([FAIL, PASS, PASS])  # b fails; then x passes; then b passes
+    h = Harness(
+        monkeypatch,
+        [plan(t("b", role="qa_engineer", writes=["tests/**"])),
+         plan(t("x", writes=["backend/**"]), t("b", role="qa_engineer", writes=["tests/**"], depends_on=["x"]))],
+        lambda r, o: RoleRun(next(answers)),
+    )
+    result = await run(start(tmp_path))
+    assert result["status"] == "passed" and result["replans"] == 1
+    assert len(h.plan_prompts) == 2 and h.calls == ["do b", "do x", "do b"]
+    assert next(x for x in result["task_log"].tasks if x.role == "qa_engineer").attempt == 2

@@ -12,6 +12,8 @@ dependencies = [
     "langgraph>=1.0",
     "pydantic>=2.11",
     "pyyaml>=6",
+    "fastapi>=0.120",
+    "uvicorn>=0.35",
 ]
 
 [tool.uv.sources]

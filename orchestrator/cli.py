@@ -203,5 +203,23 @@ def resume(project: str, workspaces_root: Path, run_id: str, guidance: str | Non
     _finish(result["task_log"])
 
 
+@cli.command()
+@click.option("--host", default="0.0.0.0", show_default=True)
+@click.option("--port", default=8090, show_default=True)
+@click.option("--workspaces-root", type=click.Path(path_type=Path, file_okay=False), default=None)
+@click.option("--demo", is_flag=True, help="Use the scripted demo model (no LLM, no sandbox).")
+def serve(host: str, port: int, workspaces_root: Path | None, demo: bool) -> None:
+    """Start the web UI and API."""
+    import uvicorn
+
+    from orchestrator.server import Settings, create_app
+
+    settings = Settings.from_env()
+    if workspaces_root is not None:
+        settings.workspaces_root = workspaces_root
+    settings.demo = settings.demo or demo
+    uvicorn.run(create_app(settings), host=host, port=port, log_level="info")
+
+
 if __name__ == "__main__":
     cli()

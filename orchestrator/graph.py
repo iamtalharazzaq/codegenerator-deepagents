@@ -300,7 +300,7 @@ def _settle_blocked(state: OrchestratorState) -> None:
                 if d is None or d.status in DEAD_STATUSES:
                     t.status = "blocked"
                     t.reason = f"depends on {dep}, which is {d.status if d else 'unknown'}"
-                    _emit(state, "task_blocked", task=t.id, reason=t.reason)
+                    _emit(state, "task_blocked", task_id=t.id, reason=t.reason)
                     changed = True
                     break
 
@@ -347,6 +347,9 @@ async def plan_node(state: OrchestratorState) -> dict[str, Any]:
     planned = [p for p in planned if p.role != PLANNER_ROLE]
     failed = [t for t in log.tasks if t.status == "fail"]
     log.tasks = _merge_plan(log, planned)
+    for t in log.tasks:
+        if t.status == "fail":  # replanned around: it is waiting for its next attempt, not freshly failed
+            t.status = "pending"
     last_failure: str | None = None
     end_reason: str | None = None
     if not _has_open_tasks(log):
@@ -448,7 +451,7 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
         _emit(
             state,
             "tool_call" if kind == "call" else "tool_result",
-            task=task.id,
+            task_id=task.id,
             role=task.role,
             tool=record.name,
             summary=_summarize(record, kind),
@@ -457,7 +460,7 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
 
     def on_block(tool: str, path: str, reason: str) -> None:
         _emit(
-            state, "guardrail_hit", kind="write_blocked", task=task.id, role=task.role, tool=tool, path=path, reason=reason
+            state, "guardrail_hit", kind="write_blocked", task_id=task.id, role=task.role, tool=tool, path=path, reason=reason
         )
 
     scope = WriteScope(task.writes, cfg.max_file_bytes, cfg.max_files_per_task)
@@ -479,7 +482,7 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
         )
     except TimeoutError:
         error = f"timed out after {cfg.task_timeout_s:g}s"
-        _emit(state, "guardrail_hit", kind="task_timeout", task=task.id, role=task.role, reason=error)
+        _emit(state, "guardrail_hit", kind="task_timeout", task_id=task.id, role=task.role, reason=error)
     except Exception as exc:  # noqa: BLE001 (any agent/model/sandbox failure is a failed attempt, not a crashed run)
         error = f"{type(exc).__name__}: {exc}"[:300]
 
@@ -495,7 +498,7 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
     elif tools and (verdict := machine_verdict(task.role, run.calls)) is not None:
         ok, why = verdict
         if not ok and status == "pass":
-            _emit(state, "guardrail_hit", kind="status_overridden", task=task.id, role=task.role, reason=why)
+            _emit(state, "guardrail_hit", kind="status_overridden", task_id=task.id, role=task.role, reason=why)
             status, reason = "fail", why
         elif not ok:
             reason = f"{reason}; {why}"
@@ -555,8 +558,8 @@ def route_after_act(state: OrchestratorState) -> Literal["act", "plan", "escalat
     log = state["task_log"]
     if state.get("end_reason") or any(t.status == "escalated" for t in log.tasks):
         return "escalate"
-    if any(t.status == "fail" for t in log.tasks):
-        return "plan"
+    if state.get("last_failure") and any(t.status == "fail" for t in log.tasks):
+        return "plan"  # only a failure from the batch that just ran triggers a replan
     if _has_open_tasks(log):
         return "act"
     return "report" if _all_done(log) else "escalate"
