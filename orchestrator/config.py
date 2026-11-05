@@ -20,7 +20,9 @@ class RunConfig:
     # Per-task write budgets (guardrails).
     max_file_bytes: int = 200_000
     max_files_per_task: int = 30
-    max_agent_steps: int = 60  # model/tool steps one task may take
+    # LangGraph counts the model step and the tool step separately, so 200 is about 100 tool calls. (60 killed a real
+    # backend task right after it had written all its files.) Stuck detection and the task timeout are the real brakes.
+    max_agent_steps: int = 200
     # Switches.
     plan_approval: bool = False  # the API turns this on by default
     report_summary: bool = False  # ask the Project Manager for a short summary paragraph in report.md

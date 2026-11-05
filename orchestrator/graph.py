@@ -451,11 +451,17 @@ def _commit_rest(state: OrchestratorState) -> None:
             _emit(state, "plan_warning", message=f"could not commit the remaining changes: {exc}"[:200])
 
 
+BREVITY = (
+    "Keep every file as short as it can be while meeting the done condition; documents stay under 80 lines. "
+    "Long files make later agents slow and are cut off by the model's small context.\n\n"
+)
+
+
 def _scope_instruction(task: Task) -> str:
     """Tell the agent where it may write. Without this it guesses file names, gets blocked, and burns model rounds."""
     if not task.writes:
-        return ""
-    return (
+        return BREVITY
+    return BREVITY + (
         f"You may only create or edit files inside: {', '.join(task.writes)}. Put every file there (use paths "
         "relative to the project root); a write anywhere else is blocked and repeated blocked writes stop the task.\n\n"
     )

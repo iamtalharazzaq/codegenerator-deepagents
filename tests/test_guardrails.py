@@ -64,3 +64,37 @@ def test_machine_verdict_uses_the_last_real_exit_code():
     assert machine_verdict("devops_engineer", [ToolRecord("run_build", {}, "exit 0\n")]) == (True, "run_build exited 0")
     errored = [ToolRecord("run_tests", {}, "Blocked", error=True)]
     assert machine_verdict("qa_engineer", errored)[0] is False
+
+
+async def test_the_git_folder_cannot_be_listed_or_read_and_repeated_attempts_stop_the_task():
+    """Seen on a real run: after one blocked write the agent listed 17 .git/objects folders until the step cap."""
+    from langchain_core.messages import ToolMessage
+
+    from orchestrator.guardrails import WriteScope, WriteScopeMiddleware
+
+    seen = []
+    scope = WriteScope(globs=("backend/**",))
+    mw = WriteScopeMiddleware(scope, lambda tool, path, reason: seen.append((tool, path, reason)))
+
+    class Req:
+        def __init__(self, name, args):
+            self.tool_call = {"name": name, "args": args, "id": "c1"}
+
+    async def handler(request):
+        return ToolMessage(content="ok", tool_call_id="c1")
+
+    for name, args in [("ls", {"path": "/.git"}), ("ls", {"path": "/.git/objects/29"}), ("read_file", {"file_path": ".git/HEAD"}),
+                       ("grep", {"path": "/.git/refs", "pattern": "x"})]:
+        out = await mw.awrap_tool_call(Req(name, args), handler)
+        assert out.status == "error" and ".git folder is not available" in out.content
+    assert scope.blocked == 4 and len(seen) == 4
+    ok = await mw.awrap_tool_call(Req("ls", {"path": "/docs"}), handler)
+    assert ok.content == "ok" and scope.blocked == 4  # ordinary reads are untouched
+    ok = await mw.awrap_tool_call(Req("read_file", {"file_path": "/.github/workflows/ci.yml"}), handler)
+    assert ok.content == "ok"  # ".github" is not ".git"
+
+
+def test_the_step_budget_is_large_enough_for_a_real_coding_task():
+    from orchestrator.config import RunConfig
+
+    assert RunConfig().max_agent_steps >= 150  # 60 killed a backend task that had already written all five files

@@ -22,6 +22,8 @@ from langgraph.prebuilt.tool_node import ToolCallRequest
 from langgraph.types import Command
 
 WRITE_TOOLS = ("write_file", "edit_file")
+# Any tool that takes a path may not touch `.git`: a blocked agent was seen listing every object folder in it.
+PATH_ARGS = ("file_path", "path")
 _ENV_OK_SUFFIXES = (".example", ".sample", ".template")
 _WILDCARDS = "*?["
 
@@ -126,17 +128,7 @@ class WriteScopeMiddleware(AgentMiddleware[Any, Any, Any]):
     def name(self) -> str:
         return "WriteScopeMiddleware"
 
-    def _refusal(self, request: ToolCallRequest) -> ToolMessage | None:
-        call = request.tool_call
-        if call["name"] not in WRITE_TOOLS:
-            return None
-        args = call.get("args") or {}
-        path = str(args.get("file_path") or args.get("path") or "")
-        body = args.get("content") if call["name"] == "write_file" else args.get("new_string", "")
-        reason = self.scope.check(path, len(str(body or "").encode("utf-8")))
-        if reason is None:
-            self.scope.record(path)
-            return None
+    def _blocked(self, call: Any, path: str, reason: str) -> ToolMessage:
         self.scope.blocked += 1
         if self._on_block is not None:
             self._on_block(call["name"], path, reason)
@@ -145,6 +137,24 @@ class WriteScopeMiddleware(AgentMiddleware[Any, Any, Any]):
             tool_call_id=call["id"],
             status="error",
         )
+
+    def _refusal(self, request: ToolCallRequest) -> ToolMessage | None:
+        call = request.tool_call
+        args = call.get("args") or {}
+        if call["name"] not in WRITE_TOOLS:
+            for key in PATH_ARGS:
+                value = args.get(key)
+                normalized = normalize_path(value) if isinstance(value, str) else None
+                if normalized is not None and ".git" in normalized.split("/"):
+                    return self._blocked(call, str(value), "the .git folder is not available")
+            return None
+        path = str(args.get("file_path") or args.get("path") or "")
+        body = args.get("content") if call["name"] == "write_file" else args.get("new_string", "")
+        reason = self.scope.check(path, len(str(body or "").encode("utf-8")))
+        if reason is None:
+            self.scope.record(path)
+            return None
+        return self._blocked(call, path, reason)
 
     def wrap_tool_call(
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], ToolMessage | Command[Any]]

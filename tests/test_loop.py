@@ -414,3 +414,4 @@ async def test_the_agent_is_told_where_it_may_write(tmp_path, monkeypatch):
     assert "You may only create or edit files inside: server/**, docs/api.md" in scoped
     unscoped = next(p for p in h.prompts if p.startswith("do b"))
     assert "You may only create or edit" not in unscoped
+    assert "documents stay under 80 lines" in scoped and "documents stay under 80 lines" in unscoped
