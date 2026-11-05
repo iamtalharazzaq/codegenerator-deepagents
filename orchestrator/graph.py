@@ -82,7 +82,9 @@ PLAN_FORMAT = (
     '{"key": "short-name", "role": ..., "objective": ..., "inputs": [...], "done_condition": ..., '
     '"depends_on": ["keys of tasks that must pass first"], "writes": ["folder/**"]}\n'
     'Tasks that can safely run at the same time must have different "writes" folders and no depends_on between '
-    'them. Put QA after the code it tests. Leave "writes" empty only for a task that must run alone.'
+    'them. Put QA after the code it tests. Leave "writes" empty only for a task that must run alone. Each task can '
+    'write ONLY inside its "writes" paths, so name real project folders or files ("src/**", "tests/**", '
+    '"docs/design.md"), and give a code task a folder wide enough for all the files it needs.'
 )
 
 REASONS = {
@@ -449,6 +451,16 @@ def _commit_rest(state: OrchestratorState) -> None:
             _emit(state, "plan_warning", message=f"could not commit the remaining changes: {exc}"[:200])
 
 
+def _scope_instruction(task: Task) -> str:
+    """Tell the agent where it may write. Without this it guesses file names, gets blocked, and burns model rounds."""
+    if not task.writes:
+        return ""
+    return (
+        f"You may only create or edit files inside: {', '.join(task.writes)}. Put every file there (use paths "
+        "relative to the project root); a write anywhere else is blocked and repeated blocked writes stop the task.\n\n"
+    )
+
+
 async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int, failures: list[str]) -> None:
     cfg, ws = _cfg(state), state["workspace"]
     task.status = "in_progress"
@@ -460,6 +472,7 @@ async def _run_task(state: OrchestratorState, task: Task, dispatches_after: int,
         f"{task.objective}\n\n"
         f"Inputs: {', '.join(task.inputs) or 'none'}\n"
         f"Done when: {task.done_condition}\n\n"
+        f"{_scope_instruction(task)}"
         "Do the work with your tools. Then reply with a short summary of what you did. Your reply is recorded "
         "automatically: do not write it to a file.\n"
         "The LAST lines of your reply must be exactly this, with BOTH dash lines (the opening and the closing one), "

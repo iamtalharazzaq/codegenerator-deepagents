@@ -37,6 +37,7 @@ class Harness:
         self.plans = iter(plans)
         self.plan_prompts: list[str] = []
         self.calls: list[str] = []  # objectives, in start order
+        self.prompts: list[str] = []  # the full task prompt each agent was given
         self.active = 0
         self.max_active = 0
         self.worker = worker or (lambda role, objective: RoleRun(PASS))
@@ -49,6 +50,7 @@ class Harness:
 
     async def _work(self, role, objective, model, workspace, tools, **kw):
         self.calls.append(objective.split("\n")[0])
+        self.prompts.append(objective)
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         try:
@@ -401,3 +403,14 @@ def test_the_task_prompt_does_not_tell_the_model_to_write_its_reply_to_a_file():
 
     source = inspect.getsource(graph_mod._run_task)
     assert "do not write it to a file" in source and "result artifact" not in source
+
+
+async def test_the_agent_is_told_where_it_may_write(tmp_path, monkeypatch):
+    """Found on the real model: agents guessed file names, were blocked by the write scope, and burned model rounds
+    because the prompt never said which paths were allowed."""
+    h = Harness(monkeypatch, [plan(t("a", writes=["server/**", "docs/api.md"]), t("b", writes=[]))])
+    await run(start(tmp_path))
+    scoped = next(p for p in h.prompts if p.startswith("do a"))
+    assert "You may only create or edit files inside: server/**, docs/api.md" in scoped
+    unscoped = next(p for p in h.prompts if p.startswith("do b"))
+    assert "You may only create or edit" not in unscoped
