@@ -5,6 +5,7 @@ from agent.tools.workspace import Workspace
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
+from orchestrator.config import RunConfig
 from orchestrator.graph import MAX_TOTAL_DISPATCHES, build_graph
 from orchestrator.runs import run_dir
 from orchestrator.task import TaskLog, load_task_log
@@ -134,7 +135,8 @@ async def test_role_switching_hits_the_run_level_dispatch_cap(tmp_path: Path):
                                    '"done_condition": "passes"}]'))
         script.append(fail)
     model = ScriptedModel(messages=iter(script))
-    result = await build_graph().ainvoke(_start(ws, "r7", model), {"recursion_limit": 200})
+    state = {**_start(ws, "r7", model), "config": RunConfig(max_replans=100)}  # the replan cap would stop it first
+    result = await build_graph().ainvoke(state, {"recursion_limit": 200})
     assert result["total_dispatches"] == MAX_TOTAL_DISPATCHES
     assert result["task_log"].tasks[-1].status == "escalated"
     assert result["task_log"].tasks[-1].attempt == 1  # escalated by the run cap, not the per-task cap

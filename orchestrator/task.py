@@ -9,11 +9,11 @@ human can read it directly as a debugging artifact.
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Literal
 
-TaskStatus = Literal["pending", "in_progress", "pass", "fail", "escalated"]
+TaskStatus = Literal["pending", "in_progress", "pass", "fail", "escalated", "blocked", "superseded"]
 
 
 @dataclass
@@ -26,6 +26,11 @@ class Task:
     status: TaskStatus = "pending"
     attempt: int = 0
     depends_on: tuple[str, ...] = ()
+    # Paths/globs the task may write. Empty = anywhere in work/ (and then it never runs alongside another task).
+    writes: tuple[str, ...] = ()
+    # Why the task last failed / was superseded / blocked; and every failure reason so far (repeat detection).
+    reason: str = ""
+    reasons: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -33,6 +38,8 @@ class TaskLog:
     run_id: str
     request: str
     tasks: list[Task]
+    # The failure the planner has not yet replanned around (kept so a resumed run knows what went wrong).
+    last_failure: str | None = None
 
 
 def save_task_log(log: TaskLog, path: Path) -> None:
@@ -52,7 +59,10 @@ def load_task_log(path: Path) -> TaskLog:
             status=t["status"],
             attempt=t["attempt"],
             depends_on=tuple(t["depends_on"]),
+            writes=tuple(t.get("writes", ())),
+            reason=t.get("reason", ""),
+            reasons=list(t.get("reasons", [])),
         )
         for t in data["tasks"]
     ]
-    return TaskLog(run_id=data["run_id"], request=data["request"], tasks=tasks)
+    return TaskLog(run_id=data["run_id"], request=data["request"], tasks=tasks, last_failure=data.get("last_failure"))
