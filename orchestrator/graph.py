@@ -1,4 +1,4 @@
-"""The orchestration graph: plan -> dispatch -> observe -> (dispatch | replan | escalate | done).
+"""The orchestration graph: plan -> (dispatch | escalate | done); dispatch -> observe -> (dispatch | replan | escalate | done).
 
 - `plan` asks the Project Manager role for a JSON task list (on a replan, for the *remaining* work, with
   the last failure's summary in the prompt).
@@ -31,11 +31,14 @@ from orchestrator.status_block import parse_status
 from orchestrator.task import Task, TaskLog, save_task_log
 
 MAX_ATTEMPTS = 2
+# Attempt counting is per task (per role), so a planner that keeps moving the same work between roles would
+# never hit MAX_ATTEMPTS; this bounds the whole run so the graph is safe to invoke standalone.
+MAX_TOTAL_DISPATCHES = 20
+PLANNER_ROLE = "project_manager"
 TASK_LOG_FILE = "task_log.json"
 OPEN_STATUSES = ("pending", "fail")
 
 ROSTER = """\
-- project_manager: plans the work and breaks it into tasks
 - business_analyst: clarifies requirements and acceptance criteria
 - product_manager: writes user stories and priorities
 - solution_architect: designs the system and its interfaces
@@ -60,6 +63,8 @@ class OrchestratorState(TypedDict):
     last_failure: str | None
     # Id of the task most recently dispatched; observe/route read it. Set by dispatch_node.
     current_task_id: NotRequired[str | None]
+    # Dispatches so far in this run (all tasks, all roles); capped by MAX_TOTAL_DISPATCHES.
+    total_dispatches: NotRequired[int]
 
 
 def _persist(state: OrchestratorState) -> None:
@@ -141,12 +146,33 @@ def _merge_plan(log: TaskLog, planned: list[PlannedTask]) -> list[Task]:
     return closed + merged
 
 
+def _has_open_tasks(log: TaskLog) -> bool:
+    return any(t.status in OPEN_STATUSES for t in log.tasks)
+
+
 async def plan_node(state: OrchestratorState) -> dict:
-    reply = await run_role("project_manager", _plan_prompt(state), state["model"], state["workspace"].work, extra_tools=())
+    reply = await run_role(PLANNER_ROLE, _plan_prompt(state), state["model"], state["workspace"].work, extra_tools=())
     log = state["task_log"]
-    log.tasks = _merge_plan(log, parse_plan(reply))
+    # The Project Manager is the planner, never a dispatched worker: tasks assigned to it are dropped.
+    planned = [p for p in parse_plan(reply) if p.role != PLANNER_ROLE]
+    failed = [t for t in log.tasks if t.status == "fail"]
+    log.tasks = _merge_plan(log, planned)
+    last_failure: str | None = None
+    if not _has_open_tasks(log) and state["last_failure"]:
+        # The planner gave up on the failing task without re-proposing it: record it as escalated and keep
+        # `last_failure` so route_after_plan sends the run to escalate.
+        for t in failed:
+            t.status = "escalated"
+            log.tasks.append(t)
+        last_failure = state["last_failure"]
     _persist(state)
-    return {"task_log": log, "last_failure": None}
+    return {"task_log": log, "last_failure": last_failure}
+
+
+def route_after_plan(state: OrchestratorState) -> Literal["dispatch", "escalate", "done"]:
+    if _has_open_tasks(state["task_log"]):
+        return "dispatch"
+    return "escalate" if state["last_failure"] else "done"
 
 
 async def dispatch_node(state: OrchestratorState) -> dict:
@@ -167,7 +193,7 @@ async def dispatch_node(state: OrchestratorState) -> dict:
     task.status = "in_progress"
     task.attempt += 1
     _persist(state)
-    return {"task_log": log, "current_task_id": task.id}
+    return {"task_log": log, "current_task_id": task.id, "total_dispatches": state.get("total_dispatches", 0) + 1}
 
 
 async def observe_node(state: OrchestratorState) -> dict:
@@ -177,7 +203,7 @@ async def observe_node(state: OrchestratorState) -> dict:
     last_failure: str | None = None
     if result.status == "pass":
         task.status = "pass"
-    elif task.attempt >= MAX_ATTEMPTS:
+    elif task.attempt >= MAX_ATTEMPTS or state.get("total_dispatches", 0) >= MAX_TOTAL_DISPATCHES:
         task.status = "escalated"
     else:
         task.status = "fail"
@@ -196,13 +222,15 @@ def route_after_observe(state: OrchestratorState) -> Literal["dispatch", "plan",
     if task.status == "fail":
         return "plan"
     if task.status == "pass":
-        remaining = any(t.status in OPEN_STATUSES for t in state["task_log"].tasks)
-        return "dispatch" if remaining else "done"
+        if not _has_open_tasks(state["task_log"]):
+            return "done"
+        return "escalate" if state.get("total_dispatches", 0) >= MAX_TOTAL_DISPATCHES else "dispatch"
     raise ValueError(f"unexpected status {task.status!r} after observe")
 
 
 async def escalate_node(state: OrchestratorState) -> dict:
-    """Terminal: a task failed its last allowed attempt. The task log already records it as escalated."""
+    """Terminal: a task failed its last allowed attempt, the planner gave up on a failing task, or the run hit
+    MAX_TOTAL_DISPATCHES. The task log already records the escalated task (if any)."""
     return {}
 
 
@@ -213,7 +241,9 @@ def build_graph() -> CompiledStateGraph:
     graph.add_node("observe", observe_node)
     graph.add_node("escalate", escalate_node)
     graph.set_entry_point("plan")
-    graph.add_edge("plan", "dispatch")
+    graph.add_conditional_edges(
+        "plan", route_after_plan, {"dispatch": "dispatch", "escalate": "escalate", "done": END}
+    )
     graph.add_edge("dispatch", "observe")
     graph.add_conditional_edges(
         "observe",

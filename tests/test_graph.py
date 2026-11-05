@@ -5,7 +5,7 @@ from agent.tools.workspace import Workspace
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage
 
-from orchestrator.graph import build_graph
+from orchestrator.graph import MAX_TOTAL_DISPATCHES, build_graph
 from orchestrator.runs import run_dir
 from orchestrator.task import TaskLog, load_task_log
 
@@ -80,4 +80,62 @@ async def test_second_failure_on_the_same_task_escalates_without_a_third_attempt
     assert result["last_failure"] is None
     # The model was never asked for a 3rd plan after the 2nd failure: exactly the 4 scripted messages were consumed
     # (a 5th request would have raised from the exhausted iterator).
+    assert_all_consumed(model)
+
+
+def _start(ws: Workspace, run_id: str, model: ScriptedModel) -> dict:
+    return {"request": "x", "workspace": ws, "run_id": run_id, "model": model,
+            "task_log": TaskLog(run_id=run_id, request="x", tasks=[]), "last_failure": None}
+
+
+async def test_project_manager_tasks_are_never_dispatched(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1"); ws.create()
+    model = ScriptedModel(messages=iter([
+        plan_message('[{"role": "project_manager", "objective": "plan more", "inputs": [], "done_condition": "planned"},'
+                     ' {"role": "product_manager", "objective": "write 1 story", "inputs": [], "done_condition": "ok"}]'),
+        AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
+    ]))
+    result = await build_graph().ainvoke(_start(ws, "r4", model))
+    assert [t.role for t in result["task_log"].tasks] == ["product_manager"]
+    assert result["task_log"].tasks[0].status == "pass"
+    assert_all_consumed(model)
+
+
+async def test_empty_first_plan_finishes_without_dispatching(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1"); ws.create()
+    model = ScriptedModel(messages=iter([plan_message("[]")]))
+    result = await build_graph().ainvoke(_start(ws, "r5", model))
+    assert result["task_log"].tasks == []
+    assert result["last_failure"] is None
+    assert_all_consumed(model)
+
+
+async def test_empty_replan_after_a_failure_escalates(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1"); ws.create()
+    model = ScriptedModel(messages=iter([
+        plan_message('[{"role": "qa_engineer", "objective": "fix it", "inputs": [], "done_condition": "passes"}]'),
+        AIMessage(content="Nope.\n---\nstatus: fail\nreason: still broken\n---"),
+        plan_message("[]"),
+    ]))
+    result = await build_graph().ainvoke(_start(ws, "r6", model))
+    assert [(t.status, t.attempt) for t in result["task_log"].tasks] == [("escalated", 1)]
+    assert result["last_failure"] is not None
+    assert_all_consumed(model)
+
+
+async def test_role_switching_hits_the_run_level_dispatch_cap(tmp_path: Path):
+    ws = Workspace(tmp_path, "p1"); ws.create()
+    fail = AIMessage(content="Nope.\n---\nstatus: fail\nreason: still broken\n---")
+    roles = ["qa_engineer", "backend_developer"]
+    script: list[AIMessage] = []
+    for i in range(MAX_TOTAL_DISPATCHES):
+        role = roles[i % 2]
+        script.append(plan_message(f'[{{"role": "{role}", "objective": "fix it", "inputs": [], '
+                                   '"done_condition": "passes"}]'))
+        script.append(fail)
+    model = ScriptedModel(messages=iter(script))
+    result = await build_graph().ainvoke(_start(ws, "r7", model), {"recursion_limit": 200})
+    assert result["total_dispatches"] == MAX_TOTAL_DISPATCHES
+    assert result["task_log"].tasks[-1].status == "escalated"
+    assert result["task_log"].tasks[-1].attempt == 1  # escalated by the run cap, not the per-task cap
     assert_all_consumed(model)
