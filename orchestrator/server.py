@@ -30,6 +30,7 @@ from orchestrator.config import RunConfig
 from orchestrator.delivery import build_zip
 from orchestrator.events import EventLog
 from orchestrator.runner import (
+    new_project_name,
     prepare_workspace,
     read_meta,
     resume_note,
@@ -50,7 +51,7 @@ RESUMABLE = ("escalated", "stopped", "error", "interrupted")
 @dataclass
 class Settings:
     workspaces_root: Path
-    default_project: str = "demo"
+    default_project: str | None = None  # None: every run gets its own new project
     concurrency: int = 1
     web_dist: Path | None = None
     demo: bool = False
@@ -61,7 +62,7 @@ class Settings:
         dist = os.environ.get("WEB_DIST")
         return cls(
             workspaces_root=Path(os.environ.get("WORKSPACES_ROOT", "/app/workspaces")),
-            default_project=os.environ.get("DEFAULT_PROJECT", "demo"),
+            default_project=os.environ.get("DEFAULT_PROJECT") or None,
             concurrency=int(os.environ.get("ORCH_CONCURRENCY", "1")),
             web_dist=Path(dist) if dist else None,
             demo=os.environ.get("ORCH_DEMO") == "1",
@@ -182,13 +183,28 @@ def create_app(
     async def config() -> dict[str, Any]:
         return {"default_project": cfg.default_project, "concurrency": cfg.concurrency, "demo": cfg.demo}
 
+    @app.get("/api/projects")
+    async def list_projects() -> list[dict[str, Any]]:
+        """Projects that have runs (the volume may hold other tools' folders too). Newest first."""
+        found: dict[str, dict[str, Any]] = {}
+        for meta_file in cfg.workspaces_root.glob("*/runs/*/meta.json"):
+            try:
+                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            name = meta_file.parent.parent.parent.name
+            row = found.setdefault(name, {"name": name, "runs": 0, "last_run_at": 0.0})
+            row["runs"] += 1
+            row["last_run_at"] = max(row["last_run_at"], float(meta.get("created_at", 0)))
+        return sorted(found.values(), key=lambda r: r["last_run_at"], reverse=True)
+
     @app.post("/api/runs", status_code=201)
     async def start_run(body: StartRequest) -> dict[str, Any]:
-        project = body.project or cfg.default_project
+        run_id = uuid4().hex[:8]
+        project = body.project or cfg.default_project or new_project_name(body.request, run_id)
         ws = workspace_for(project)
         if project_busy(project):
             raise HTTPException(409, f"Project {project!r} already has a run in progress.")
-        run_id = uuid4().hex[:8]
         base = await asyncio.to_thread(prepare_workspace, ws, run_id)
         events = EventLog(run_path(ws, run_id) / "events.jsonl")
         handle = RunHandle(run_id, ws, events)

@@ -25,3 +25,6 @@ demo: build
 run: build
 	docker run --rm -it --network $(NET) -v $(VOLUME):/app/workspaces $(LLM_ENV) \
 		$(IMAGE) run --project demo --workspaces-root /app/workspaces "$(REQUEST)"
+
+prompts:
+	uv run python scripts/capture_prompts.py

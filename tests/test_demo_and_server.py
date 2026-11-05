@@ -124,8 +124,10 @@ async def test_one_run_at_a_time_per_project_and_input_validation(tmp_path):
     async with client_for(make_app(tmp_path)) as c:
         assert (await c.post("/api/runs", json={"request": "x", "project": "../evil"})).status_code == 400
         assert (await c.post("/api/runs", json={"request": ""})).status_code == 422
-        await c.post("/api/runs", json={"request": "a"})  # waits for approval, so it stays active
-        assert (await c.post("/api/runs", json={"request": "b"})).status_code == 409
+        await c.post("/api/runs", json={"request": "a", "project": "shared"})  # waits for approval, so it stays active
+        assert (await c.post("/api/runs", json={"request": "b", "project": "shared"})).status_code == 409
+        other = await c.post("/api/runs", json={"request": "c"})  # a new project: no conflict
+        assert other.status_code == 201
         assert (await c.get("/api/runs/zzzzzzzz")).status_code == 404
         assert (await c.get("/api/runs/00000000/artifacts/../../x")).status_code in (404, 422)
 
@@ -215,3 +217,54 @@ async def test_qa_runs_its_tests_in_the_sandbox_and_its_verdict_follows_the_real
     assert [(t.attempt, t.status, t.reason) for t in qa] == [(1, "fail", "tests failed"), (2, "pass", "tests passed")]
     run_tests = [e for e in events.since(0) if e["type"] == "tool_call" and e["tool"] == "run_tests"]
     assert len(run_tests) == 2
+
+
+async def test_every_run_gets_its_own_project_so_a_zip_holds_only_that_run(tmp_path):
+    """Found on a real run: runs shared one project, so a new request's zip also held every earlier run's files."""
+    async with client_for(make_app(tmp_path)) as c:
+        first = (await c.post("/api/runs", json={"request": "Make a calculator", "plan_approval": False})).json()
+        await wait_done(c, first["run_id"])
+        # an old file from a previous run sits in the first project; the next run must not see it
+        (tmp_path / first["project"] / "work" / "old_frontend.js").write_text("// from an earlier run\n")
+        second = (await c.post("/api/runs", json={"request": "Create a calculator in python only", "plan_approval": False})).json()
+        await wait_done(c, second["run_id"])
+        assert first["project"] != second["project"]
+        assert second["project"].startswith("create-a-calculator-in-") and second["project"].endswith(second["run_id"])
+        z = await c.get(f"/api/runs/{second['run_id']}/delivery.zip")
+        (tmp_path / "second.zip").write_bytes(z.content)
+        assert "old_frontend.js" not in zipfile.ZipFile(tmp_path / "second.zip").namelist()
+        assert z.headers["content-disposition"].count(second["project"]) == 1  # the zip is named after its project
+
+
+async def test_naming_an_existing_project_builds_on_its_files_on_purpose(tmp_path):
+    async with client_for(make_app(tmp_path)) as c:
+        first = (await c.post("/api/runs", json={"request": "Base", "plan_approval": False})).json()
+        await wait_done(c, first["run_id"])
+        (tmp_path / first["project"] / "work" / "keep_me.txt").write_text("existing work\n")
+        again = (await c.post("/api/runs", json={"request": "Add to it", "project": first["project"], "plan_approval": False})).json()
+        assert again["project"] == first["project"]
+        await wait_done(c, again["run_id"])
+        z = await c.get(f"/api/runs/{again['run_id']}/delivery.zip")
+        (tmp_path / "again.zip").write_bytes(z.content)
+        assert "keep_me.txt" in zipfile.ZipFile(tmp_path / "again.zip").namelist()
+
+
+async def test_the_project_list_has_only_projects_with_runs_newest_first(tmp_path):
+    (tmp_path / "some-other-tool-folder").mkdir()  # the volume is shared with other software
+    async with client_for(make_app(tmp_path)) as c:
+        a = (await c.post("/api/runs", json={"request": "alpha", "plan_approval": False})).json()
+        await wait_done(c, a["run_id"])
+        b = (await c.post("/api/runs", json={"request": "beta", "plan_approval": False})).json()
+        await wait_done(c, b["run_id"])
+        names = [p["name"] for p in (await c.get("/api/projects")).json()]
+        assert names == [b["project"], a["project"]] and "some-other-tool-folder" not in names
+
+
+def test_project_names_are_readable_and_valid():
+    from orchestrator.runner import new_project_name
+    from orchestrator.server import PROJECT_RE
+
+    name = new_project_name("Create a calculator in python only it should have only arthemetic operators", "c5c38465")
+    assert name == "create-a-calculator-in-p-c5c38465" or PROJECT_RE.match(name)
+    assert PROJECT_RE.match(name) and name.endswith("-c5c38465") and len(name) <= 40
+    assert new_project_name("!!!", "abcdef01") == "run-abcdef01"

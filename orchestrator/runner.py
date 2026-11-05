@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -22,6 +23,14 @@ from orchestrator.task import TaskLog
 from orchestrator.team import OrchestratorState, run_team
 
 META_FILE = "meta.json"
+
+
+def new_project_name(request: str, run_id: str) -> str:
+    """A fresh project for one request, e.g. `calculator-in-python-c5c38465`. Every run starts from an empty folder
+    unless the person picks an existing project, so a zip holds what this request produced and nothing older."""
+    words = re.findall(r"[a-z0-9]+", request.lower())
+    slug = "-".join(words)[:24].strip("-") or "run"
+    return f"{slug}-{run_id}"
 
 
 def prepare_workspace(ws: Workspace, run_id: str) -> str | None:

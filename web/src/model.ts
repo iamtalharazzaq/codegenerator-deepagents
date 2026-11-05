@@ -58,13 +58,15 @@ export interface TodoChange {
   completed: string[];
 }
 
+/** Only what the person said and notes that belong to no task. Plans, results and the finish each have their own card. */
 export type ChatItem =
-  | { kind: "user"; text: string }
-  | { kind: "pm"; text: string }
-  | { kind: "todo"; text: string }
-  | { kind: "result"; taskId: string; role: string; ok: boolean; attempt: number; reason: string }
-  | { kind: "note"; text: string; tone: "info" | "warn" }
-  | { kind: "run"; ok: boolean; title: string; text: string; summary: string };
+  | { kind: "user"; seq: number; text: string }
+  | { kind: "note"; seq: number; text: string; tone: "info" | "warn" };
+
+export interface PmNote {
+  seq: number;
+  text: string;
+}
 
 export interface LogEntry {
   seq: number;
@@ -102,6 +104,7 @@ export interface RunView {
   tasks: TaskView[];
   todos: Todo[];
   todoChanges: TodoChange[];
+  pmNotes: PmNote[];
   chat: ChatItem[];
   guardrails: GuardrailHit[]; // those with no task (dispatch cap, secret scan)
   pulses: Pulse[];
@@ -123,7 +126,7 @@ export interface RunView {
 export function emptyRun(): RunView {
   return {
     runId: null, project: "", request: "", status: "idle", pm: "idle", check: null, tasks: [], todos: [],
-    todoChanges: [], chat: [], guardrails: [], pulses: [], awaitingApproval: false, dispatches: 0, maxDispatches: 20,
+    todoChanges: [], pmNotes: [], chat: [], guardrails: [], pulses: [], awaitingApproval: false, dispatches: 0, maxDispatches: 20,
     concurrency: 1, zip: null, secretBlock: null, finished: null, log: [], lastSaid: "", startedAt: 0, endedAt: null,
     lastEvent: "", lastSeq: 0,
   };
@@ -182,35 +185,33 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       return {
         ...emptyRun(), runId: e.run_id, project: e.project, request: e.request, status: "running", log, lastSeq: e.seq,
         lastEvent: s.lastEvent, concurrency: e.concurrency ?? 1, maxDispatches: e.max_dispatches ?? 20, startedAt: e.ts,
-        chat: [{ kind: "user", text: e.request }],
+        chat: [{ kind: "user", seq: e.seq, text: e.request }],
       };
     case "run_resumed":
-      return { ...s, status: "running", finished: null, endedAt: null, zip: null, chat: [...s.chat, { kind: "user", text: e.guidance || "Continue this run." }] };
+      return { ...s, status: "running", finished: null, endedAt: null, zip: null, chat: [...s.chat, { kind: "user", seq: e.seq, text: e.guidance || "Continue this run." }] };
     case "plan_started":
       return { ...s, pm: "planning", check: null };
     case "pm_said":
-      return { ...s, lastSaid: e.text, chat: [...s.chat, { kind: "pm", text: e.text }] };
+      return { ...s, lastSaid: e.text, pmNotes: [...s.pmNotes, { seq: e.seq, text: e.text }] };
     case "todos_updated": {
       const todos: Todo[] = e.todos;
-      const first = s.todos.length === 0;
-      const change = first ? null : diffTodos(s.todos, todos, e.seq, firstSentence(s.lastSaid));
-      const text = first ? `Planned ${todos.length} item${todos.length === 1 ? "" : "s"}` : `Updated the plan${change && (change.added.length || change.removed.length) ? `: +${change.added.length} −${change.removed.length}` : ""}`;
-      return { ...s, todos, pm: "idle", lastSaid: "", todoChanges: change ? [...s.todoChanges, change] : s.todoChanges, chat: [...s.chat, { kind: "todo", text }] };
+      const change = s.todos.length === 0 ? null : diffTodos(s.todos, todos, e.seq, firstSentence(s.lastSaid));
+      return { ...s, todos, pm: "idle", lastSaid: "", todoChanges: change ? [...s.todoChanges, change] : s.todoChanges };
     }
     case "plan_ready": { // runs recorded before the Project Manager became a deep agent
       const todos: Todo[] = (e.tasks as TaskView[]).filter((t) => t.status !== "superseded").map((t) => ({ content: `${roleLabel(t.role)}: ${t.objective}`, status: t.status === "pass" ? "completed" : "pending" }));
-      return { ...s, todos, pm: "idle", chat: [...s.chat, ...(e.reason ? [{ kind: "pm" as const, text: e.reason }] : [])] };
+      return { ...s, todos, pm: "idle", pmNotes: e.reason ? [...s.pmNotes, { seq: e.seq, text: e.reason }] : s.pmNotes };
     }
     case "plan_approval_requested":
       return { ...s, todos: e.todos ?? s.todos, pm: "approval", awaitingApproval: true };
     case "plan_approved":
       return { ...s, awaitingApproval: false, pm: "idle" };
     case "plan_rejected":
-      return { ...s, awaitingApproval: false, chat: [...s.chat, { kind: "note", tone: "info", text: "You rejected the plan." }] };
+      return { ...s, awaitingApproval: false, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "info", text: "You rejected the plan." }] };
     case "pm_nudged":
-      return { ...s, chat: [...s.chat, { kind: "note", tone: "warn", text: "The Project Manager ended without delegating anything, so it was asked once to delegate." }] };
+      return { ...s, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: "The Project Manager ended without delegating anything, so it was asked once to delegate." }] };
     case "plan_warning":
-      return { ...s, chat: [...s.chat, { kind: "note", tone: "warn", text: e.message }] };
+      return { ...s, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: e.message }] };
     case "task_started": {
       const task = fromPayload(e.task, undefined, e, false);
       return { ...s, tasks: upsertTask(s.tasks, task), pm: "waiting", check: null, dispatches: s.dispatches + 1, pulses: pulse(task.role, false) };
@@ -226,7 +227,7 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       const secret = e.kind === "secret_scan" ? hit : s.secretBlock;
       const owned = !!e.task_id && s.tasks.some((t) => t.id === e.task_id);
       if (owned) return { ...s, secretBlock: secret, tasks: s.tasks.map((t) => (t.id === e.task_id ? { ...t, guardrails: [...t.guardrails, hit] } : t)) };
-      return { ...s, secretBlock: secret, guardrails: [...s.guardrails, hit], chat: [...s.chat, { kind: "note", tone: "warn", text: `Guardrail: ${guardrailText(hit)}` }] };
+      return { ...s, secretBlock: secret, guardrails: [...s.guardrails, hit], chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: `Guardrail: ${guardrailText(hit)}` }] };
     }
     case "task_blocked":
       return s;
@@ -237,7 +238,6 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       const stillActive = tasks.some((t) => t.status === "in_progress");
       return {
         ...s, tasks, check: e.verdict === "pass" ? "pass" : "fail", pm: stillActive ? "waiting" : "checking", pulses: pulse(task.role, true),
-        chat: [...s.chat, { kind: "result", taskId: task.id, role: task.role, ok: e.verdict === "pass", attempt: task.attempt, reason: task.reason }],
       };
     }
     case "delivery_ready":
@@ -245,12 +245,10 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
     case "run_finished": {
       const status = e.status as RunStatus;
       const passed = status === "passed";
-      const title = passed ? "Run passed" : status === "stopped" ? "Run stopped" : status === "error" ? "Run failed to finish" : "Run escalated";
       const finished: Finished = { status, reason: e.reason ?? "", message: e.message ?? "", summary: e.summary ?? "", seconds: e.seconds ?? 0 };
       return {
         ...s, status, pm: passed ? "done" : "stopped", awaitingApproval: false, finished, endedAt: e.ts,
         tasks: s.tasks.map((t) => (t.status === "in_progress" ? { ...t, status: "fail", endSeq: e.seq, endTs: e.ts } : t)),
-        chat: [...s.chat, { kind: "run", ok: passed, title, text: e.message ?? "", summary: e.summary ?? "" }],
       };
     }
     default:
@@ -344,21 +342,18 @@ export function progress(view: RunView): { done: number; total: number } {
   return { done, total: roles.size };
 }
 
-export type Attention =
-  | { kind: "approval"; title: string; detail: string[] }
-  | { kind: "blocked"; ui: UiStatus; title: string; detail: string; role?: string; taskId?: string; objective?: string; tries: number; guardrails: number }
-  | { kind: "done"; title: string; detail: string }
-  | null;
+export interface Blocker {
+  ui: UiStatus;
+  title: string;
+  role?: string;
+  taskId?: string;
+  objective?: string;
+  tries: number;
+}
 
-/** The one thing the person needs to know or do next. */
-export function attention(view: RunView): Attention {
-  if (view.awaitingApproval) {
-    return { kind: "approval", title: "Approve the plan to start", detail: view.todos.map((t) => t.content) };
-  }
-  if (view.status === "passed") {
-    return { kind: "done", title: "Run passed", detail: view.finished?.summary || view.finished?.message || "All work finished." };
-  }
-  if (!isResumable(view.status)) return null;
+/** What stopped the run, or null. (Approval is a plan decision and lives in the plan card; the finish in the result card.) */
+export function attention(view: RunView): Blocker | null {
+  if (!isResumable(view.status) || view.awaitingApproval) return null;
   const failedLatest = [...new Set(view.tasks.map((t) => t.role))]
     .map((r) => latestTask(view.tasks, r))
     .filter((t): t is TaskView => !!t && t.status === "fail")
@@ -367,13 +362,11 @@ export function attention(view: RunView): Attention {
   if (failedLatest) {
     const tries = Math.max(...view.tasks.filter((t) => t.role === failedLatest.role).map((t) => t.attempt));
     return {
-      kind: "blocked", ui, role: failedLatest.role, taskId: failedLatest.id, objective: failedLatest.objective, tries,
+      ui, role: failedLatest.role, taskId: failedLatest.id, objective: failedLatest.objective, tries,
       title: `${roleLabel(failedLatest.role)} ${tries >= 2 ? `failed ${tries} times` : "failed"}`,
-      detail: failedLatest.reason || view.finished?.message || "The task did not pass.",
-      guardrails: view.tasks.filter((t) => t.role === failedLatest.role).reduce((n, t) => n + t.guardrails.length, 0),
     };
   }
-  return { kind: "blocked", ui, title: RUN_LABEL[view.status], detail: view.finished?.message || "The run stopped.", tries: 0, guardrails: 0 };
+  return { ui, title: view.finished?.message || RUN_LABEL[view.status], tries: 0 };
 }
 
 export interface Wave {
@@ -405,4 +398,38 @@ export function waves(tasks: TaskView[]): Wave[] {
 export function formatDuration(seconds: number): string {
   const s = Math.max(0, Math.round(seconds));
   return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`;
+}
+
+export type FeedItem =
+  | { kind: "user" | "note"; seq: number; text: string; tone?: "info" | "warn" }
+  | { kind: "wave"; seq: number; tasks: TaskView[]; parallel: boolean };
+
+/** The run as one chronological feed: what the person said, notes, and the delegations in the order they ran
+ * (tasks that ran at the same time share one row). Plans, results and the finish are not repeated here. */
+export function feed(view: RunView): FeedItem[] {
+  const items: FeedItem[] = view.chat.map((c) => ({ ...c }));
+  for (const w of waves(view.tasks)) items.push({ kind: "wave", seq: w.tasks[0].startSeq, tasks: w.tasks, parallel: w.parallel });
+  return items.sort((a, b) => a.seq - b.seq);
+}
+
+/** The single "what is happening right now" line. */
+export function nowLine(view: RunView): { ui: UiStatus; text: string } | null {
+  if (view.status !== "running") return null;
+  if (view.awaitingApproval) return { ui: "blocked", text: "Waiting for your approval of the plan" };
+  const running = view.tasks.filter((t) => t.status === "in_progress");
+  if (running.length) {
+    const first = running[0];
+    const tool = first.toolLines[first.toolLines.length - 1];
+    const more = running.length > 1 ? ` and ${running.length - 1} more` : "";
+    return { ui: "running", text: `${roleLabel(first.role)}${more} working${tool ? `: ${tool}` : ""}` };
+  }
+  if (view.pm === "planning" || view.todos.length === 0) return { ui: "running", text: "Project Manager is planning" };
+  return { ui: "running", text: "Project Manager is reading the results and deciding what is next" };
+}
+
+/** Identical consecutive failures are shown once: later tries say "same as try N". */
+export function repeatsEarlier(view: RunView, task: TaskView): number | null {
+  if (task.status !== "fail" || !task.reason) return null;
+  const earlier = view.tasks.filter((t) => t.role === task.role && t.attempt < task.attempt && t.reason === task.reason);
+  return earlier.length ? earlier[0].attempt : null;
 }

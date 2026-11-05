@@ -82,6 +82,20 @@ reason: <one line>
 
 READ_ONLY_TOOLS = ("ls", "read_file", "grep", "glob")
 
+# The to-do list tool's own text, replacing langchain's default. The default (about 5,000 characters) tells the model
+# "for simple objectives, just complete the objective directly and do NOT use this tool", which pushes a small model
+# to do the work itself instead of delegating, and it uses about a quarter of a 4096-token context on its own.
+TODO_SYSTEM_PROMPT = (
+    "## `write_todos`\n"
+    "Keep the team's to-do list with `write_todos`: one item per piece of work, naming the specialist. Mark an item "
+    "`completed` only after that specialist's reply ended with `status: pass`. Revise the list when work fails or the "
+    "plan changes. Never call it twice in the same turn."
+)
+TODO_TOOL_DESCRIPTION = (
+    "Write or update the team's to-do list. Each item has `content` (one piece of work, naming the specialist) and "
+    "`status`: pending, in_progress or completed."
+)
+
 REASONS = {
     "all_passed": "All tasks passed.",
     "pm_failed": "The Project Manager reported that the work did not finish.",
@@ -475,7 +489,11 @@ def build_team(ctx: TeamContext) -> Any:
         model=state["model"],
         system_prompt=pm_system_prompt(),
         subagents=subagent_specs(ctx, state.get("sandbox_client")),  # type: ignore[arg-type]
-        middleware=[TodoListMiddleware(), ToolAllowlistMiddleware(pm.tools), TeamControl(ctx)],
+        middleware=[
+            TodoListMiddleware(system_prompt=TODO_SYSTEM_PROMPT, tool_description=TODO_TOOL_DESCRIPTION),
+            ToolAllowlistMiddleware(pm.tools),
+            TeamControl(ctx),
+        ],
         backend=FilesystemBackend(root_dir=ctx.workspace.work.resolve(), virtual_mode=True),
         name=pm.name,
     )
