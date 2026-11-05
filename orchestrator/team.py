@@ -200,6 +200,7 @@ class TeamContext:
         self.role_runs: dict[str, int] = {}
         self.dispatches = 0
         self.todos: list[dict[str, Any]] = []
+        self.said: set[str] = set()
         self.approved = False
         self.rejected = False
         self._approval: asyncio.Future[bool] | None = None
@@ -323,6 +324,7 @@ class TeamControl(AgentMiddleware[Any, Any, Any]):
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]
     ) -> ToolMessage | Command[Any]:
         call = request.tool_call
+        self.say_once(request)
         if call["name"] == "write_todos":
             result = await handler(request)
             todos = (call.get("args") or {}).get("todos")
@@ -336,6 +338,17 @@ class TeamControl(AgentMiddleware[Any, Any, Any]):
         if call["name"] != "task":
             return await handler(request)
         return await self.delegate(request, handler)
+
+    def say_once(self, request: ToolCallRequest) -> None:
+        """Emit what the Project Manager wrote alongside this tool call (its reasoning), once per message."""
+        messages = getattr(request.state, "get", lambda *_: None)("messages") if isinstance(request.state, dict) else None
+        last = messages[-1] if messages else None
+        text = result_text(last).strip() if last is not None else ""
+        key = getattr(last, "id", None) or text
+        if not text or key in self.ctx.said:
+            return
+        self.ctx.said.add(key)
+        self.ctx.emit("pm_said", text=text[:1500])
 
     async def delegate(
         self, request: ToolCallRequest, handler: Callable[[ToolCallRequest], Awaitable[ToolMessage | Command[Any]]]
@@ -549,7 +562,7 @@ def finish(ctx: TeamContext, final_text: str, error_reason: str | None) -> tuple
     ctx.save()
     ctx.emit(
         "run_finished", status=status, reason=reason, message=REASONS.get(reason, reason), tasks=counts,
-        dispatches=ctx.dispatches, seconds=round(time.monotonic() - ctx.t0, 1),
+        dispatches=ctx.dispatches, seconds=round(time.monotonic() - ctx.t0, 1), summary=summary[:1500],
     )
     return status, reason, summary
 

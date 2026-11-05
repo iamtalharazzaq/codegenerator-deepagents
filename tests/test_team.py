@@ -367,3 +367,18 @@ async def test_concurrency_one_runs_delegations_one_at_a_time(tmp_path):
     assert result["status"] == "passed" and model.max_active == 1
     order = types(events)
     assert order.index("task_finished") < [i for i, t in enumerate(order) if t == "task_started"][1]
+
+
+async def test_what_the_project_manager_says_alongside_a_tool_call_becomes_a_pm_said_event(tmp_path):
+    script = [
+        AIMessage(content="I will start with the backend because the UI depends on it.",
+                  tool_calls=[tc("task", {"description": "Do it.\nWRITES: a/**", "subagent_type": "backend-developer"}, "k1")]),
+        AIMessage(content=PASS),
+        AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
+    ]
+    _, events, result = await run(tmp_path, script)
+    said = [e["text"] for e in events.since(0) if e["type"] == "pm_said"]
+    assert said == ["I will start with the backend because the UI depends on it."]  # once, and not the final reply
+    finished = next(e for e in events.since(0) if e["type"] == "run_finished")
+    assert finished["summary"] == "Done."  # the final reply without its status block
+    assert types(events).index("pm_said") < types(events).index("task_started")
