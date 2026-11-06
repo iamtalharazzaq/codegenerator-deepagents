@@ -80,6 +80,6 @@ Path("docs/PROMPTS-AS-SENT.md").write_text("\n".join(out))
 print("PM system chars:", len(CAPTURED[0][1]), "| specialist system chars:", len(CAPTURED[1][1]) if len(CAPTURED)>1 else None)
 print("PM tools:", [n for n,_ in CAPTURED[0][3]]); print("specialist tools:", [n for n,_ in CAPTURED[1][3]] if len(CAPTURED)>1 else None)
 for who, system, msgs, tools in CAPTURED:
-    tool_chars = sum(len(n) + len(d) for n, d in tools)
-    print(f"{who}: system {len(system)} chars + tool text {tool_chars} chars = about {(len(system)+tool_chars)//4} tokens of the 4096 before any work")
+    tool_chars = sum(len(n) + len(d) for n, d in tools)  # name + description only; tests/test_context_budget.py counts the full schemas
+    print(f"{who}: system {len(system)} chars + tool text {tool_chars} chars (descriptions only; schemas add more, see tests/test_context_budget.py)")
 print("default todo wording gone:", "NOT use this tool" not in Path("docs/PROMPTS-AS-SENT.md").read_text())

@@ -84,7 +84,38 @@ async def test_plan_approval_blocks_until_approved(tmp_path):
                 break
         assert r.status_code == 200
         assert (await c.post(f"/api/runs/{run_id}/approve", json={"approved": True})).status_code == 409
+        # after QA fails the demo Project Manager adds steps to the plan: that revised plan is put to the person again
+        for _ in range(400):
+            await asyncio.sleep(0.05)
+            if (await c.post(f"/api/runs/{run_id}/approve", json={"approved": True})).status_code == 200:
+                break
         assert (await wait_done(c, run_id))["meta"]["status"] == "passed"
+
+
+async def test_requesting_changes_sends_the_plan_back_and_asks_again(tmp_path):
+    async with client_for(make_app(tmp_path)) as c:
+        run_id = (await c.post("/api/runs", json={"request": "x", "final_review": False})).json()["run_id"]
+
+        async def answer(body: dict) -> None:
+            for _ in range(200):
+                await asyncio.sleep(0.05)
+                if (await c.post(f"/api/runs/{run_id}/approve", json=body)).status_code == 200:
+                    return
+            raise AssertionError("the run never asked")
+
+        await answer({"approved": False, "feedback": "also add a README"})  # sent back
+        await answer({"approved": True})  # the revised plan
+        await answer({"approved": True})  # the plan changed again after QA found a problem
+        info = await wait_done(c, run_id)
+        kinds = [e["type"] for e in await events_of(c, run_id)]
+        assert info["meta"]["status"] == "passed"
+        assert kinds.count("plan_approval_requested") == 3 and kinds.index("plan_changes_requested") < kinds.index("plan_approved")
+        assert "task_started" in kinds and kinds.index("plan_approved") < kinds.index("task_started")  # nothing ran before the approval
+        shown = [e["todos"] for e in await events_of(c, run_id) if e["type"] == "plan_approval_requested"]
+        assert not any("also add a README" in item["content"] for item in shown[0])
+        assert any("also add a README" in item["content"] for item in shown[1])  # the revised plan the person is asked about carries the note
+        code = [t for t in info["tasks"] if t["role"] == "code_analyst"]
+        assert len(code) == 1  # and the work was done once
 
 
 async def test_rejecting_the_plan_stops_the_run_with_nothing_started(tmp_path):
@@ -105,6 +136,7 @@ async def test_escalation_offers_resume_and_a_labelled_partial_zip(tmp_path):
         assert info["meta"]["status"] == "escalated" and not info["has_zip"]
         assert (await c.get(f"/api/runs/{run_id}/delivery.zip")).status_code == 409  # not offered by default
         part = await c.get(f"/api/runs/{run_id}/delivery.zip?partial=1")
+        assert f"{run_id}" not in part.headers["content-disposition"] and "-partial.zip" in part.headers["content-disposition"]
         assert part.status_code == 200
         (tmp_path / "p.zip").write_bytes(part.content)
         assert "PARTIAL.txt" in zipfile.ZipFile(tmp_path / "p.zip").namelist()
@@ -231,9 +263,10 @@ async def test_every_run_gets_its_own_project_so_a_zip_holds_only_that_run(tmp_p
         assert first["project"] != second["project"]
         assert second["project"].startswith("create-a-calculator-in-") and second["project"].endswith(second["run_id"])
         z = await c.get(f"/api/runs/{second['run_id']}/delivery.zip")
+        # the folder keeps the run id (so similar requests never collide); the download does not
+        assert 'filename="create-a-calculator-in-python.zip"' in z.headers["content-disposition"], z.headers["content-disposition"]
         (tmp_path / "second.zip").write_bytes(z.content)
         assert "old_frontend.js" not in zipfile.ZipFile(tmp_path / "second.zip").namelist()
-        assert z.headers["content-disposition"].count(second["project"]) == 1  # the zip is named after its project
 
 
 async def test_naming_an_existing_project_builds_on_its_files_on_purpose(tmp_path):
@@ -322,3 +355,58 @@ async def test_a_run_that_did_not_pass_is_not_sent_for_review(tmp_path):
         info = await wait_done(c, run_id)
         assert info["meta"]["status"] == "escalated"
         assert "review_requested" not in [e["type"] for e in await events_of(c, run_id)]
+
+
+async def test_file_preview_serves_project_text_and_nothing_else(tmp_path):
+    from agent.tools.workspace import Workspace
+
+    from orchestrator.runner import write_meta
+
+    ws = Workspace(tmp_path, "demo")
+    ws.create()
+    write_meta(ws, "abcdef01", status="passed", request="x")
+    (ws.work / "backend").mkdir(parents=True)
+    (ws.work / "backend" / "app.py").write_text("print('hi')\n", encoding="utf-8")
+    (ws.work / ".env").write_text("SECRET=1\n", encoding="utf-8")
+    (ws.work / "blob.bin").write_bytes(b"\x00\x01\x02")
+    (ws.work / "big.txt").write_text("x" * 250_000, encoding="utf-8")
+    (tmp_path / "outside.txt").write_text("nope", encoding="utf-8")
+    (ws.work / "link.txt").symlink_to(tmp_path / "outside.txt")
+    async with client_for(make_app(tmp_path)) as c:
+        ok = await c.get("/api/runs/abcdef01/files/backend/app.py")
+        assert ok.status_code == 200 and ok.text == "print('hi')\n"
+        assert (await c.get("/api/runs/abcdef01/files//backend/app.py")).status_code == 200  # a leading slash is tolerated
+        for hidden in (".env", "missing.py", "link.txt", "backend", "../../outside.txt", "%2e%2e/%2e%2e/outside.txt"):
+            assert (await c.get(f"/api/runs/abcdef01/files/{hidden}")).status_code == 404, hidden
+        assert (await c.get("/api/runs/abcdef01/files/blob.bin")).status_code == 415
+        assert (await c.get("/api/runs/abcdef01/files/big.txt")).status_code == 415
+        assert (await c.get("/api/runs/zzzzzzzz/files/backend/app.py")).status_code == 404
+
+
+async def test_a_run_waiting_for_the_person_is_listed_as_needing_approval_not_as_running(tmp_path):
+    async with client_for(make_app(tmp_path)) as c:
+        run_id = (await c.post("/api/runs", json={"request": "x", "plan_approval": True, "final_review": True})).json()["run_id"]
+
+        async def listed() -> dict:
+            return next(r for r in (await c.get("/api/runs")).json() if r["run_id"] == run_id)
+
+        async def wait_for(what: str) -> dict:
+            for _ in range(300):
+                row = await listed()
+                if row["waiting_for"] == what:
+                    return row
+                await asyncio.sleep(0.05)
+            raise AssertionError(f"never waited for {what}")
+
+        row = await wait_for("plan")
+        assert row["status"] == "needs_approval" and (await c.get(f"/api/runs/{run_id}")).json()["waiting_for"] == "plan"
+        assert (await c.post(f"/api/runs/{run_id}/approve", json={"approved": True})).status_code == 200
+        row = await wait_for("plan")  # after QA fails, the plan gains steps: the revised plan is put to the person again
+        assert row["status"] == "needs_approval"
+        assert (await c.post(f"/api/runs/{run_id}/approve", json={"approved": True})).status_code == 200
+        row = await wait_for("review")  # the finished work is waiting to be delivered or sent back
+        assert row["status"] == "needs_approval"
+        assert (await c.post(f"/api/runs/{run_id}/review", json={"accept": True})).status_code == 200
+        info = await wait_done(c, run_id)
+        row = await listed()
+        assert info["meta"]["status"] == "passed" and row["status"] == "passed" and row["waiting_for"] is None

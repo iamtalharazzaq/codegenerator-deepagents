@@ -5,16 +5,25 @@ import zipfile
 from pathlib import Path
 from typing import Any
 
+import httpx
+import openai
 import pytest
 from agent.tools.workspace import Workspace, git
 from langchain_core.language_models import BaseChatModel
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.outputs import ChatGeneration, ChatResult
+from pydantic import Field
 
 from orchestrator.config import RunConfig
 from orchestrator.events import EventLog
-from orchestrator.team import objective_of, parse_writes, resolve_role, run_team
+from orchestrator.team import (
+    REASONS,
+    objective_of,
+    parse_writes,
+    resolve_role,
+    run_team,
+)
 
 PASS = "Did it.\n---\nstatus: pass\nreason: ok\n---"
 FAIL = "Could not.\n---\nstatus: fail\nreason: broken\n---"
@@ -221,13 +230,13 @@ async def test_the_first_delegation_waits_for_approval_and_only_asks_once(tmp_pa
 
     async def approve(payload):
         asked.append(payload["todos"])
-        return True
+        return {"approved": True}
 
     script = [
         calls(tc("write_todos", {"todos": [{"content": "A", "status": "pending"}]})),
-        delegate("backend-developer", "One.\nWRITES: a/**", "k1"),
+        delegate("backend-developer", "One.", "k1"),
         AIMessage(content=PASS),
-        delegate("backend-developer", "Two.\nWRITES: b/**", "k2"),
+        delegate("backend-developer", "Two.", "k2"),
         AIMessage(content=PASS),
         AIMessage(content=PASS),
     ]
@@ -239,10 +248,10 @@ async def test_the_first_delegation_waits_for_approval_and_only_asks_once(tmp_pa
 
 async def test_a_rejected_plan_delegates_nothing_and_the_run_is_stopped(tmp_path):
     async def reject(payload):
-        return False
+        return {"approved": False}
 
     script = [
-        delegate("backend-developer", "One.\nWRITES: a/**"),
+        delegate("backend-developer", "One."),
         AIMessage(content="Rejected.\n---\nstatus: fail\nreason: plan rejected\n---"),
     ]
     _, events, result = await run(tmp_path, script, cfg=RunConfig(plan_approval=True), approve=reject)
@@ -376,7 +385,7 @@ async def test_what_the_project_manager_says_alongside_a_tool_call_becomes_a_pm_
         AIMessage(content=PASS),
         AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
     ]
-    _, events, result = await run(tmp_path, script)
+    _, events, _result = await run(tmp_path, script)
     said = [e["text"] for e in events.since(0) if e["type"] == "pm_said"]
     assert said == ["I will start with the backend because the UI depends on it."]  # once, and not the final reply
     finished = next(e for e in events.since(0) if e["type"] == "run_finished")
@@ -435,7 +444,7 @@ async def test_the_zip_is_built_only_after_the_person_accepts(tmp_path):
         asked.append({"zip_existed": zip_path.exists(), **payload})
         return {"accept": True, "changes": ""}
 
-    ws, events, result = await run(tmp_path, two_step_script(), cfg=RunConfig(final_review=True), review=review)
+    _ws, events, result = await run(tmp_path, two_step_script(), cfg=RunConfig(final_review=True), review=review)
     assert result["status"] == "passed" and asked == [{"zip_existed": False, "round": 1}] and zip_path.exists()
     requested = next(e for e in events.since(0) if e["type"] == "review_requested")
     assert requested["files"] == ["a/x.py"] and requested["summary"] == "Built a/x.py."  # the status block is not shown
@@ -463,7 +472,7 @@ async def test_asked_for_changes_the_project_manager_gets_the_note_does_the_work
     async def review(payload):
         return next(decisions)
 
-    ws, events, result = await run(tmp_path, script, cfg=RunConfig(final_review=True), review=review, model=Spy(messages=iter(script)))
+    _ws, events, result = await run(tmp_path, script, cfg=RunConfig(final_review=True), review=review, model=Spy(messages=iter(script)))
     assert result["status"] == "passed"
     assert any("asks for changes" in m and "also add b/y.py" in m for m in seen)  # the Project Manager received the note
     rounds = [e["round"] for e in events.since(0) if e["type"] == "review_requested"]
@@ -542,9 +551,9 @@ async def test_delegating_before_planning_is_refused_and_the_plan_comes_first(tm
 
 async def test_a_project_manager_that_will_not_plan_is_let_through_with_a_warning(tmp_path):
     script = [
-        delegate("backend-developer", "One.\nWRITES: a/**", "k0"),
-        delegate("backend-developer", "One.\nWRITES: a/**", "k1"),
-        delegate("backend-developer", "One.\nWRITES: a/**", "k2"),  # third try: allowed
+        delegate("backend-developer", "One.", "k0"),
+        delegate("backend-developer", "One.", "k1"),
+        delegate("backend-developer", "One.", "k2"),  # third try: allowed
         AIMessage(content=PASS),
         AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
     ]
@@ -557,3 +566,193 @@ async def test_planning_is_not_enforced_when_switched_off(tmp_path):
     script = [delegate("backend-developer", "One.\nWRITES: a/**"), AIMessage(content=PASS), AIMessage(content=PASS)]
     _, events, _ = await run(tmp_path, script, cfg=RunConfig(require_plan=False))
     assert "plan_required" not in types(events)
+
+
+# ---------------------------------------------------------------- waiting for the person is not run time
+
+
+async def test_time_spent_waiting_for_the_final_review_does_not_count_against_the_run_time_limit(tmp_path):
+    """Found on a real run: it finished its work, waited for the person's review, and was ended by the run time limit
+    (`run_timeout`) without ever delivering the zip."""
+    async def slow_review(payload):
+        await asyncio.sleep(3.0)  # far longer than the whole run's time limit below
+        return {"accept": True, "changes": ""}
+
+    _, events, result = await run(tmp_path, two_step_script(), cfg=RunConfig(final_review=True, run_timeout_s=2.0), review=slow_review)
+    assert (result["status"], result["end_reason"]) == ("passed", "all_passed")
+    assert "delivery_ready" in types(events)
+
+
+async def test_time_spent_waiting_for_plan_approval_does_not_count_either(tmp_path):
+    async def slow_approve(payload):
+        await asyncio.sleep(3.0)
+        return {"approved": True}
+
+    script = [
+        calls(tc("write_todos", {"todos": [{"content": "Backend Developer: x", "status": "pending"}]})),
+        delegate("backend-developer", "Do it.\nWRITES: a/**"),
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),  # real work, so the task evaluation passes
+        AIMessage(content=PASS),
+        AIMessage(content="Done.\n---\nstatus: pass\nreason: ok\n---"),
+    ]
+    _, _, result = await run(tmp_path, script, cfg=RunConfig(plan_approval=True, run_timeout_s=2.0), approve=slow_approve)
+    assert result["status"] == "passed"
+
+
+async def test_the_time_limit_still_applies_to_work(tmp_path):
+    class Slow(ScriptedModel):
+        async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs):
+            await asyncio.sleep(2)
+            return await super()._agenerate(messages, stop, run_manager, **kwargs)
+
+    _, _, result = await run(tmp_path, [AIMessage(content=PASS)], cfg=RunConfig(run_timeout_s=0.6, max_nudges=0), model=Slow(messages=iter([AIMessage(content=PASS)])))
+    assert (result["status"], result["end_reason"]) == ("escalated", "run_timeout")
+
+
+# ---------------------------------------------------------------- the retry loop
+
+def failing_then_fixed_script() -> list:
+    return [
+        delegate("backend-developer", "Create a/x.py.\nWRITES: a/**"),
+        AIMessage(content=FAIL),  # the specialist reports failure
+        AIMessage(content="Could not do it.\n---\nstatus: fail\nreason: broken\n---"),  # the Project Manager stops
+        delegate("backend-developer", "Create a/x.py, this time with the import fixed.\nWRITES: a/x.py", "k2"),
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),
+        AIMessage(content=PASS),
+        AIMessage(content="Fixed.\n---\nstatus: pass\nreason: all passed\n---"),
+    ]
+
+
+async def test_failed_work_goes_back_to_the_project_manager_with_the_reason_and_is_fixed(tmp_path):
+    cfg = RunConfig(max_fix_rounds=2, max_nudges=0)
+    ws, events, result = await run(tmp_path, failing_then_fixed_script(), cfg=cfg)
+    asked = [e for e in events.since(0) if e["type"] == "retry_requested"]
+    assert len(asked) == 1 and "broken" in asked[0]["message"] and "try 1 of 3" in asked[0]["message"]
+    assert (ws.work / "a" / "x.py").exists()
+    assert (result["status"], result["end_reason"]) == ("passed", "all_passed")
+
+
+async def test_the_retry_loop_is_off_unless_switched_on(tmp_path):
+    _, events, result = await run(tmp_path, failing_then_fixed_script()[:3], cfg=RunConfig(max_nudges=0))
+    assert "retry_requested" not in types(events)
+    assert result["status"] == "escalated"
+
+
+async def test_the_retry_loop_stops_after_max_fix_rounds_and_the_run_escalates(tmp_path):
+    script = [
+        delegate("backend-developer", "Create a/x.py.\nWRITES: a/**"),
+        AIMessage(content=FAIL),
+        AIMessage(content="Could not.\n---\nstatus: fail\nreason: broken\n---"),
+        delegate("backend-developer", "Try again.\nWRITES: a/x.py", "k2"),
+        AIMessage(content=FAIL),
+        AIMessage(content="Still not.\n---\nstatus: fail\nreason: broken\n---"),
+    ]
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(max_fix_rounds=1, max_nudges=0))
+    assert types(events).count("retry_requested") == 1
+    assert result["status"] == "escalated"
+
+
+async def test_no_retry_is_asked_when_the_task_has_no_tries_left(tmp_path):
+    script = [delegate("backend-developer", "Create a/x.py.\nWRITES: a/**"), AIMessage(content=FAIL), AIMessage(content="No.\n---\nstatus: fail\nreason: broken\n---")]
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(max_fix_rounds=2, max_attempts=1, max_nudges=0))
+    assert "retry_requested" not in types(events)
+    assert result["status"] == "escalated"
+
+
+# ---------------------------------------------------------------- a note on the plan that is only a question
+
+async def test_a_question_about_the_plan_is_answered_and_a_plan_is_shown_again_instead_of_ending_the_run(tmp_path):
+    """Seen live: the person answered the plan with 'How it will run?', the Project Manager replied in words only,
+    and the run ended with no plan approved and no final status."""
+    answers = iter([{"approved": False, "feedback": "How will it run?"}, {"approved": True}])
+    shown = []
+
+    async def approve(payload):
+        shown.append(payload["todos"])
+        return next(answers)
+
+    script = [
+        calls(tc("write_todos", {"todos": [{"content": "A", "status": "pending"}]})),
+        delegate("backend-developer", "One.\nWRITES: a/**", "k1"),  # rejected with the person's question
+        AIMessage(content="It runs with `python a/x.py`."),  # words only: no plan, no delegation
+        calls(tc("write_todos", {"todos": [{"content": "A", "status": "pending"}]})),  # asked once to answer and plan
+        delegate("backend-developer", "One.\nWRITES: a/**", "k2"),
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),
+        AIMessage(content=PASS),
+        AIMessage(content=PASS),
+    ]
+    ws, events, result = await run(tmp_path, script, cfg=RunConfig(plan_approval=True, max_nudges=0), approve=approve)
+    order = types(events)
+    assert order.count("plan_answer_requested") == 1 and len(shown) == 2
+    assert order.index("plan_changes_requested") < order.index("plan_answer_requested") < order.index("plan_approved")
+    assert (ws.work / "a" / "x.py").exists() and result["status"] == "passed"
+
+
+async def test_a_note_on_the_plan_is_not_chased_forever(tmp_path):
+    async def approve(payload):
+        return {"approved": False, "feedback": "Why?"}
+
+    script = [
+        calls(tc("write_todos", {"todos": [{"content": "A", "status": "pending"}]})),
+        delegate("backend-developer", "One.\nWRITES: a/**"),
+        AIMessage(content="Because."),
+    ] + [AIMessage(content="Still because.")] * 4
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(plan_approval=True, max_nudges=0, max_plan_replies=2), approve=approve)
+    assert types(events).count("plan_answer_requested") == 2
+    assert result["status"] == "escalated"
+
+
+# ---------------------------------------------------------------- a slow or briefly absent model server
+
+class FlakyModel(ScriptedModel):
+    """Times out the first `failures` calls, then plays the script. Records what the successful calls were sent."""
+
+    failures: int = 0
+    seen: list = Field(default_factory=list)
+
+    async def _agenerate(self, messages, *args, **kwargs):
+        if self.failures > 0:
+            self.failures -= 1
+            raise openai.APITimeoutError(request=httpx.Request("POST", "http://model/v1/chat/completions"))
+        self.seen.append([str(m.content) for m in messages if isinstance(m, HumanMessage)])
+        return await super()._agenerate(messages, *args, **kwargs)
+
+
+async def test_a_model_timeout_on_the_project_managers_call_is_retried_and_the_request_is_not_sent_twice(tmp_path):
+    script = [delegate("backend-developer", "One.\nWRITES: a/**"), calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})), AIMessage(content=PASS), AIMessage(content=PASS)]
+    model = FlakyModel(messages=iter(script), failures=2, seen=[])
+    ws, _, result = await run(tmp_path, script, cfg=RunConfig(max_nudges=0), model=model)
+    assert result["status"] == "passed" and (ws.work / "a" / "x.py").exists()
+    first = model.seen[0]
+    assert sum("Request:" in text for text in first) == 1
+
+
+async def test_a_model_that_stays_away_stops_the_run_as_resumable_not_as_a_crash(tmp_path):
+    model = FlakyModel(messages=iter([]), failures=99, seen=[])
+    _, events, result = await run(tmp_path, [], cfg=RunConfig(max_model_retries=2, max_nudges=0), model=model)
+    assert (result["status"], result["end_reason"]) == ("escalated", "model_unavailable")
+    assert "report_ready" in types(events) and "Resume the run" in result["summary"] + REASONS["model_unavailable"]
+
+
+async def test_the_person_is_never_asked_to_approve_an_empty_plan(tmp_path):
+    """Seen live: the Project Manager delegated before writing a plan, the approval gate asked about an empty to-do list,
+    and the real plan was written only after it had been approved."""
+    asked = []
+
+    async def approve(payload):
+        asked.append(payload["todos"])
+        return {"approved": True}
+
+    script = [
+        delegate("backend-developer", "One.\nWRITES: a/**", "k1"),  # no plan yet: refused, and nobody is asked
+        calls(tc("write_todos", {"todos": [{"content": "Backend Developer: make a", "status": "pending"}]})),
+        delegate("backend-developer", "One.\nWRITES: a/**", "k2"),  # now the plan is put to the person
+        calls(tc("write_file", {"file_path": "/a/x.py", "content": "1"})),
+        AIMessage(content=PASS),
+        AIMessage(content=PASS),
+    ]
+    _, events, result = await run(tmp_path, script, cfg=RunConfig(plan_approval=True, require_plan=True, max_nudges=0), approve=approve)
+    assert asked == [[{"content": "Backend Developer: make a", "status": "pending"}]]
+    order = types(events)
+    assert order.index("plan_required") < order.index("todos_updated") < order.index("plan_approval_requested") < order.index("plan_approved") < order.index("task_started")
+    assert result["status"] == "passed"

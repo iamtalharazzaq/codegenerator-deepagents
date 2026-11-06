@@ -65,14 +65,10 @@ def test_tool_refusal_covers_writes_and_the_git_folder():
         assert tool_refusal(scope, name, args)[1] == "the .git folder is not available"
 
 
-def test_call_tracker_stops_repeats_and_runaway_tasks():
-    tracker = CallTracker(max_calls=50)
+def test_call_tracker_stops_identical_repeats():
+    tracker = CallTracker()
     for _ in range(3):
         tracker.note("read_file", {"file_path": "/a"})
     with pytest.raises(AgentStuck, match="repeated the same read_file call 4 times"):
         tracker.note("read_file", {"file_path": "/a"})
-    capped = CallTracker(max_calls=3)
-    for i in range(3):
-        capped.note("ls", {"path": f"/d{i}"})
-    with pytest.raises(AgentStuck, match="more than 3 tool calls"):
-        capped.note("ls", {"path": "/d9"})
+    tracker.note("read_file", {"file_path": "/b"})  # a different call is fine
