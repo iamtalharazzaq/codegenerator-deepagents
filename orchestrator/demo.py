@@ -65,8 +65,9 @@ def _call(name: str, args: dict[str, Any]) -> dict[str, Any]:
     return {"name": name, "args": args, "id": uuid.uuid4().hex[:12], "type": "tool_call"}
 
 
-def _task(role: str, description: str, writes: str) -> dict[str, Any]:
-    return _call("task", {"description": f"{description}\nWRITES: {writes}", "subagent_type": SUBAGENT_NAME[role]})
+def _task(role: str, description: str, writes: str, retry: str = "") -> dict[str, Any]:
+    lines = f"{description}\nWRITES: {writes}" + (f"\nRETRY: {retry}" if retry else "")
+    return _call("task", {"description": lines, "subagent_type": SUBAGENT_NAME[role]})
 
 
 def _todos(items: list[tuple[str, str]]) -> dict[str, Any]:
@@ -119,16 +120,27 @@ class DemoModel(BaseChatModel):
         change_asked = any(isinstance(m, HumanMessage) and "asks for changes" in str(m.content) for m in messages)
         asked: dict[str, str] = {}
         change_done = False
+        plan_note = ""
         results: list[tuple[str, bool]] = []  # (specialist, passed) in the order the results arrived
+        last_id: dict[str, str] = {}  # the task id each specialist's latest reply carried in its `[task <id> ...]` line
+        replanned = False  # wrote a new plan after the person asked for changes
         for m in messages:
+            if isinstance(m, HumanMessage) and "asks for changes" in str(m.content):
+                replanned = False
             if isinstance(m, AIMessage):
                 for c in m.tool_calls:
                     if c["name"] == "write_todos":
                         wrote_todos += 1
+                        replanned = True
                     if c["name"] == "task":
                         asked[c["id"] or ""] = c["args"]["subagent_type"]
+            elif isinstance(m, ToolMessage) and "asked for changes to the plan" in str(m.content):
+                note = re.search(r"question about it\):\n(.*?)\n(?:If it is a question|Revise)", str(m.content), re.DOTALL)
+                plan_note = (note.group(1) if note else "").strip()  # the plan went back: nothing was delegated
             elif isinstance(m, ToolMessage) and m.tool_call_id in asked:
                 results.append((asked[m.tool_call_id], parse_status(str(m.content)).status == "pass"))
+                if found := re.search(r"\[task ([0-9a-f]{8})", str(m.content)):
+                    last_id[asked[m.tool_call_id]] = found.group(1)
                 if "Apply the requested changes" in " ".join(
                     str(c["args"].get("description", "")) for a in messages if isinstance(a, AIMessage) for c in a.tool_calls
                     if c["name"] == "task" and c["id"] == m.tool_call_id
@@ -139,11 +151,18 @@ class DemoModel(BaseChatModel):
             return sum(1 for n, _ in results if n == name)
 
         if change_asked:  # the person asked for changes after the first finish: one more task, then report again
+            if not replanned:
+                return AIMessage(content="", tool_calls=[_todos([("Backend Developer: apply the requested changes (backend/)", "in_progress")])])  # type: ignore[list-item]
             if not change_done:
                 return AIMessage(content="", tool_calls=[_task("backend_developer", "Apply the requested changes.", "backend/**")])
             return AIMessage(content="The requested changes are made and checked.\n---\nstatus: pass\nreason: changes applied\n---")
         if wrote_todos == 0:
             return AIMessage(content="", tool_calls=[_todos(FIRST_TODOS)])  # type: ignore[list-item]
+        if plan_note and wrote_todos == 1:  # the person sent the plan back: revise the list, then delegate again
+            return AIMessage(
+                content="Revising the plan with your note.",
+                tool_calls=[_todos([*FIRST_TODOS, (f"Your note: {plan_note[:80]}", "pending")])],  # type: ignore[list-item]
+            )
         if count("code-analyst") == 0:
             return AIMessage(content="", tool_calls=[_task("code_analyst", "Map the existing code this change touches.", "docs/map.md")])  # type: ignore[list-item]
         if count("solution-architect") == 0:
@@ -166,14 +185,14 @@ class DemoModel(BaseChatModel):
             return AIMessage(content=(
                 "QA failed twice, so I am stopping here for a decision instead of trying a third time."
                 "\n---\nstatus: fail\nreason: QA failed twice\n---"))
-        if wrote_todos == 1:
+        if wrote_todos == 1 + bool(plan_note):  # (a revised plan was the second list)
             return AIMessage(content="", tool_calls=[_todos(FIX_TODOS)])  # type: ignore[list-item]
         if count("backend-developer") == 1:
             return AIMessage(
                 content="QA found that expired tokens are still accepted. Adding a backend fix first.",
                 tool_calls=[_task("backend_developer", "Reject expired reset tokens.", "backend/**")],  # type: ignore[list-item]
             )
-        return AIMessage(content="", tool_calls=[_task("qa_engineer", "Re-run the flow tests after the fix.", "tests/**")])  # type: ignore[list-item]
+        return AIMessage(content="", tool_calls=[_task("qa_engineer", "Re-run the flow tests after the fix.", "tests/**", last_id.get("qa-engineer", ""))])  # type: ignore[list-item]
 
     def _specialist(self, role: str, messages: list[BaseMessage], human: str) -> AIMessage:
         tool_results = [m for m in messages if isinstance(m, ToolMessage)]

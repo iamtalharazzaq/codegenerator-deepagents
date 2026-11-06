@@ -2,9 +2,9 @@
 
 - `WriteScope`: a task may only write inside the paths its plan declared, never
   into `.git`, never outside the workspace, never a real `.env`, and within a size/file-count budget.
-- `writes_overlap`: the scheduler uses it to refuse running two tasks at once when their write areas overlap.
-- `machine_verdict`: for roles with an objective check (QA's tests, DevOps's build) the status is the real exit
-  code of the tool, not the model's say-so.
+- `CallTracker`: loop detection (the same call over and over) stops a stuck specialist. A cap on the number of calls is
+  LangChain's ToolCallLimitMiddleware, set up in `team.py`.
+(The status a specialist reports is checked separately, in `evaluate.py`.)
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from typing import Any
 
-WRITE_TOOLS = ("write_file", "edit_file")
+WRITE_TOOLS = ("write_file", "edit_file", "delete_file")
 # Any tool that takes a path may not touch `.git`: a blocked agent was seen listing every object folder in it.
 PATH_ARGS = ("file_path", "path")
 _ENV_OK_SUFFIXES = (".example", ".sample", ".template")
@@ -68,6 +68,7 @@ class WriteScope:
     max_file_bytes: int = 200_000
     max_files: int = 30
     written: set[str] = field(default_factory=set)
+    deleted: set[str] = field(default_factory=set)
     blocked: int = 0
 
     def check(self, raw_path: str, content_bytes: int) -> str | None:
@@ -85,16 +86,16 @@ class WriteScope:
             return f"more than {self.max_files} files in one task"
         return None
 
-    def record(self, raw_path: str) -> None:
+    def record(self, raw_path: str, deleting: bool = False) -> None:
         if (path := normalize_path(raw_path)) is not None:
-            self.written.add(path)
+            (self.deleted if deleting else self.written).add(path)
 
 
 def tool_refusal(scope: WriteScope, name: str, args: dict[str, Any]) -> tuple[str, str] | None:
     """(path, reason) when a tool call must be blocked, else None (and an allowed write is recorded).
 
     - any tool: never touches `.git` (a blocked agent was seen listing every object folder in it)
-    - write_file / edit_file: only inside the task's declared paths, never a real `.env`, within the size budgets"""
+    - write_file / edit_file / delete_file: only inside the task's declared paths, never a real `.env`, within the size budgets"""
     if name not in WRITE_TOOLS:
         for key in PATH_ARGS:
             value = args.get(key)
@@ -106,23 +107,19 @@ def tool_refusal(scope: WriteScope, name: str, args: dict[str, Any]) -> tuple[st
     body = args.get("content") if name == "write_file" else args.get("new_string", "")
     reason = scope.check(path, len(str(body or "").encode("utf-8")))
     if reason is None:
-        scope.record(path)
+        if name != "delete_file":  # a delete counts only once the tool says it deleted something (see SubAgentGuard)
+            scope.record(path)
         return None
     return path, reason
 
 
 class CallTracker:
-    """Per-task loop detection: the same call over and over, too many calls, too many blocked writes."""
+    """Per-task loop detection: the same call over and over."""
 
-    def __init__(self, max_calls: int) -> None:
-        self.max_calls = max_calls
-        self.calls = 0
+    def __init__(self) -> None:
         self.repeats: dict[str, int] = {}
 
     def note(self, name: str, args: dict[str, Any]) -> None:
-        self.calls += 1
-        if self.calls > self.max_calls:
-            raise AgentStuck(f"used more than {self.max_calls} tool calls")
         key = f"{name}:{json.dumps(args, sort_keys=True, default=str)[:400]}"
         self.repeats[key] = self.repeats.get(key, 0) + 1
         if self.repeats[key] > MAX_REPEATED_CALLS:

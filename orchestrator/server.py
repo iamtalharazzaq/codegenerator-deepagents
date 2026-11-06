@@ -26,17 +26,19 @@ from fastapi.staticfiles import StaticFiles
 from langchain_core.language_models import BaseChatModel
 from pydantic import BaseModel, Field
 
+from orchestrator import chat as chats
 from orchestrator.config import RunConfig
-from orchestrator.delivery import build_zip
+from orchestrator.delivery import build_zip, is_deliverable
 from orchestrator.events import EventLog
 from orchestrator.runner import (
     new_project_name,
     prepare_workspace,
     read_meta,
-    resume_note,
+    resume_fields,
     run_graph,
     run_path,
     write_meta,
+    zip_filename,
 )
 from orchestrator.secrets import scan_secrets
 from orchestrator.task import TaskLog, load_task_log
@@ -44,6 +46,7 @@ from orchestrator.team import OrchestratorState
 
 RUN_ID_RE = re.compile(r"^[0-9a-f]{8}$")
 PROJECT_RE = re.compile(r"^[A-Za-z0-9_-]{1,40}$")
+PREVIEW_BYTES = 200_000  # the largest file the Files tab will show
 ARTIFACT_RE = re.compile(r"^(?:report|[0-9a-f]{8}(?:\.attempt\d+)?)\.md$")
 RESUMABLE = ("escalated", "stopped", "error", "interrupted")
 
@@ -78,8 +81,25 @@ class StartRequest(BaseModel):
     concurrency: int | None = Field(default=None, ge=1, le=8)
 
 
+class SayRequest(BaseModel):
+    text: str = Field(min_length=1, max_length=4000)
+    plan: bool = False  # answer with the plan in key points (the first message of a conversation asks for it)
+
+
+class CreateChatRequest(BaseModel):
+    project: str | None = None  # an existing project to continue (its files are built on)
+
+
+class BuildRequest(BaseModel):
+    plan_approval: bool = True
+    final_review: bool = True
+    concurrency: int | None = Field(default=None, ge=1, le=8)
+
+
 class ApproveRequest(BaseModel):
     approved: bool
+    # Not approved + feedback: the plan goes back to the Project Manager to revise. Not approved, no feedback: stop.
+    feedback: str | None = Field(default=None, max_length=4000)
 
 
 class ReviewRequest(BaseModel):
@@ -97,7 +117,7 @@ class RunHandle:
     workspace: Workspace
     events: EventLog
     task: asyncio.Task[Any] | None = None
-    approval: asyncio.Future[bool] | None = None
+    approval: asyncio.Future[dict[str, Any]] | None = None
     review: asyncio.Future[dict[str, Any]] | None = None
     extra: dict[str, Any] = field(default_factory=dict)
 
@@ -147,7 +167,8 @@ def create_app(
 
     def run_config(concurrency: int | None, plan_approval: bool, final_review: bool) -> RunConfig:
         return RunConfig(
-            concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval, final_review=final_review, require_plan=True
+            concurrency=concurrency or cfg.concurrency, plan_approval=plan_approval, final_review=final_review, require_plan=True, max_fix_rounds=2,
+            retry_backoff_s=2.0, model_retry_wait_s=3.0,
         )
 
     async def execute(handle: RunHandle, state: OrchestratorState) -> None:
@@ -161,7 +182,7 @@ def create_app(
                 await sandbox.close()
 
     def launch(handle: RunHandle, state: OrchestratorState) -> None:
-        async def approve(payload: dict[str, Any]) -> bool:
+        async def approve(payload: dict[str, Any]) -> dict[str, Any]:
             handle.approval = asyncio.get_running_loop().create_future()
             return await handle.approval
 
@@ -237,6 +258,81 @@ def create_app(
         launch(handle, state)
         return {"run_id": run_id, "project": project}
 
+    # ------------------------------------------------------------ talk first (a conversation before any run)
+
+    chat_locks: dict[str, asyncio.Lock] = {}
+
+    def chat_or_404(chat_id: str) -> dict[str, Any]:
+        found = chats.load_chat(cfg.workspaces_root, chat_id) if re.fullmatch(r"[0-9a-f]{8}", chat_id) else None
+        if found is None:
+            raise HTTPException(404, "No such conversation.")
+        return found
+
+    async def talk(chat_id: str, text: str | None, plan: bool) -> dict[str, Any]:
+        async with chat_locks.setdefault(chat_id, asyncio.Lock()):
+            chat = chat_or_404(chat_id)
+            if text is not None:
+                chats.add(chat, "user", text.strip())
+            elif not chat["messages"]:
+                raise HTTPException(409, "Say what you want to build first.")
+            try:
+                reply = await chats.ask_model(model_factory(), chat, plan=plan, demo=cfg.demo)
+            except Exception as exc:
+                chats.save_chat(cfg.workspaces_root, chat)
+                raise HTTPException(503, f"The model did not answer ({type(exc).__name__}). Your message is saved: send again in a moment.") from exc
+            chats.add(chat, "assistant", reply, "plan" if plan else "")
+            chats.save_chat(cfg.workspaces_root, chat)
+            return chat
+
+    @app.get("/api/chats")
+    async def list_chats() -> list[dict[str, Any]]:
+        return chats.list_chats(cfg.workspaces_root)
+
+    @app.post("/api/chats", status_code=201)
+    async def create_chat(body: CreateChatRequest | None = None) -> dict[str, Any]:
+        project = body.project if body else None
+        if project:
+            workspace_for(project)  # a bad name is refused here
+        return chats.new_chat(cfg.workspaces_root, project)
+
+    @app.get("/api/chats/{chat_id}")
+    async def get_chat(chat_id: str) -> dict[str, Any]:
+        return chat_or_404(chat_id)
+
+    @app.post("/api/chats/{chat_id}/messages")
+    async def say(chat_id: str, body: SayRequest) -> dict[str, Any]:
+        return await talk(chat_id, body.text, plan=body.plan)
+
+    @app.post("/api/chats/{chat_id}/plan")
+    async def draft_plan(chat_id: str) -> dict[str, Any]:
+        return await talk(chat_id, None, plan=True)
+
+    @app.post("/api/chats/{chat_id}/build", status_code=201)
+    async def build_from_chat(chat_id: str, body: BuildRequest) -> dict[str, Any]:
+        chat = chat_or_404(chat_id)
+        if not any(m.get("kind") == "plan" for m in chat["messages"]):
+            raise HTTPException(409, "Ask for the plan first, so you see what will be built.")
+        started = await start_run(StartRequest(
+            request=chats.brief_for_run(chat), project=chat.get("project"), plan_approval=body.plan_approval,
+            final_review=body.final_review, concurrency=body.concurrency,
+        ))
+        chat = chat_or_404(chat_id)
+        chat["project"] = started["project"]
+        chat["run_ids"] = [*chat.get("run_ids", []), started["run_id"]]
+        chats.save_chat(cfg.workspaces_root, chat)
+        return started
+
+    def waiting_for(run_id: str) -> str | None:
+        """What a live run is waiting for the person to decide: its plan, or its finished work. None: it is not waiting."""
+        handle = handles.get(run_id)
+        if handle is None or not handle.active:
+            return None
+        if handle.approval is not None and not handle.approval.done():
+            return "plan"
+        if handle.review is not None and not handle.review.done():
+            return "review"
+        return None
+
     @app.get("/api/runs")
     async def list_runs() -> list[dict[str, Any]]:
         rows: list[dict[str, Any]] = []
@@ -255,7 +351,9 @@ def create_app(
             live = [t for t in tasks if t["status"] != "superseded"]
             rows.append({
                 "run_id": meta["run_id"], "project": meta.get("project"), "request": meta.get("request", ""),
-                "status": meta.get("status", "unknown"), "reason": meta.get("reason"), "created_at": meta.get("created_at", 0),
+                # A run that is waiting for a decision is not "running": it is not doing anything until the person answers.
+                "status": "needs_approval" if waiting_for(meta["run_id"]) else meta.get("status", "unknown"),
+                "waiting_for": waiting_for(meta["run_id"]), "reason": meta.get("reason"), "created_at": meta.get("created_at", 0),
                 "tasks_done": sum(t["status"] == "pass" for t in live), "tasks_total": len(live),
             })
         return sorted(rows, key=lambda r: r["created_at"], reverse=True)
@@ -269,7 +367,7 @@ def create_app(
         if (rdir / "task_log.json").exists():
             tasks = [asdict(t) for t in load_task_log(rdir / "task_log.json").tasks]
         report = (rdir / "report.md").read_text(encoding="utf-8") if (rdir / "report.md").exists() else None
-        return {"meta": meta, "tasks": tasks, "report": report,
+        return {"meta": meta, "tasks": tasks, "report": report, "waiting_for": waiting_for(run_id),
                 "has_zip": (rdir / "delivery.zip").exists(), "active": run_id in handles and handles[run_id].active}
 
     @app.get("/api/runs/{run_id}/events")
@@ -321,7 +419,7 @@ def create_app(
         handle = handles.get(run_id)
         if handle is None or handle.approval is None or handle.approval.done():
             raise HTTPException(409, "This run is not waiting for a plan decision.")
-        handle.approval.set_result(body.approved)
+        handle.approval.set_result({"approved": body.approved, "feedback": (body.feedback or "").strip()})
         return {"ok": True}
 
     @app.post("/api/runs/{run_id}/review")
@@ -346,21 +444,23 @@ def create_app(
         if project_busy(ws.path.name):
             raise HTTPException(409, f"Project {ws.path.name!r} already has a run in progress.")
         log = load_task_log(run_path(ws, run_id) / "task_log.json")
-        note = resume_note(log, body.guidance, meta.get("reason"))
+        carry_on = resume_fields(ws, run_id, log, body.guidance)  # read before the status is rewritten below
         handle = handles.get(run_id) or RunHandle(run_id, ws, EventLog(run_path(ws, run_id) / "events.jsonl"))
         handles[run_id] = handle
         try:
             await asyncio.to_thread(ws.branch, f"run/{run_id}")
         except RuntimeError:
             pass
-        config_ = run_config(meta.get("concurrency"), False, bool(meta.get("final_review", True)))
+        # The plan decision is not skipped by a resume: a plan that was never approved is asked about again.
+        config_ = run_config(meta.get("concurrency"), bool(meta.get("plan_approval", False)), bool(meta.get("final_review", True)))
         write_meta(ws, run_id, status="running", reason=None)
         handle.events.emit("run_resumed", run_id=run_id, guidance=body.guidance or "")
         state: OrchestratorState = {
             "request": log.request, "workspace": ws, "run_id": run_id, "model": model_factory(),
             "sandbox_client": sandbox_factory(), "task_log": log,
-            "config": config_, "events": handle.events, "base_commit": meta.get("base_commit"), "resume_note": note,
+            "config": config_, "events": handle.events, "base_commit": meta.get("base_commit"),
         }
+        state.update(carry_on)  # type: ignore[typeddict-item]
         launch(handle, state)
         return {"run_id": run_id}
 
@@ -389,6 +489,20 @@ def create_app(
             raise HTTPException(404, "No such artifact.")
         return PlainTextResponse(path.read_text(encoding="utf-8"))
 
+    @app.get("/api/runs/{run_id}/files/{path:path}")
+    async def preview_file(run_id: str, path: str) -> PlainTextResponse:
+        """One file of the project, as text, for the Files tab. Same exclusions as the zip (.git, real .env, caches),
+        nothing outside the project folder, no symlinks, and no binary or very large files."""
+        root = find(run_id).work.resolve()
+        candidate = root / path.lstrip("/")
+        target = candidate.resolve()
+        if not target.is_relative_to(root) or candidate.is_symlink() or not target.is_file() or not is_deliverable(target.relative_to(root)):
+            raise HTTPException(404, "No such file.")
+        data = await asyncio.to_thread(target.read_bytes)
+        if len(data) > PREVIEW_BYTES or b"\0" in data:
+            raise HTTPException(415, "This file is too large or not text, so it cannot be previewed.")
+        return PlainTextResponse(data.decode("utf-8", errors="replace"))
+
     @app.get("/api/runs/{run_id}/delivery.zip")
     async def delivery(run_id: str, partial: bool = False) -> FileResponse:
         ws = find(run_id)
@@ -398,7 +512,7 @@ def create_app(
             zip_path = rdir / "delivery.zip"
             if not zip_path.exists():
                 raise HTTPException(409, "No zip was built: the secret scan blocked it. See the report.")
-            return FileResponse(zip_path, media_type="application/zip", filename=f"{ws.path.name}-{run_id}.zip")
+            return FileResponse(zip_path, media_type="application/zip", filename=zip_filename(ws.path.name, run_id))
         if not partial:
             raise HTTPException(409, "This run did not finish. Ask for a partial zip to download what exists.")
         if run_id in handles and handles[run_id].active:
@@ -408,7 +522,7 @@ def create_app(
             raise HTTPException(409, f"Not built: the secret scan found {len(findings)} possible secret(s), e.g. {findings[0].path}.")
         dest = rdir / "delivery-partial.zip"
         await asyncio.to_thread(build_zip, ws.work, rdir, dest, partial=True)
-        return FileResponse(dest, media_type="application/zip", filename=f"{ws.path.name}-{run_id}-partial.zip")
+        return FileResponse(dest, media_type="application/zip", filename=zip_filename(ws.path.name, run_id, partial=True))
 
     # ------------------------------------------------------------ the built frontend
 

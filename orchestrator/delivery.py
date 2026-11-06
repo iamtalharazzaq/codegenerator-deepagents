@@ -24,6 +24,11 @@ def _excluded(rel: Path) -> bool:
     return name.endswith(EXCLUDED_SUFFIXES)
 
 
+def is_deliverable(rel: Path) -> bool:
+    """True for a project file that may leave the workspace (the zip and the file preview use the same rule)."""
+    return not _excluded(rel)
+
+
 def build_zip(work: Path, run_dir: Path, dest: Path, *, partial: bool = False) -> tuple[Path, int]:
     """Write the delivery zip. Returns (path, number of files)."""
     dest.parent.mkdir(parents=True, exist_ok=True)

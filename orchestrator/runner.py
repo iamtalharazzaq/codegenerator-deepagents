@@ -2,7 +2,9 @@
 
 - `prepare_workspace`: a git repo in `work/` and a `run/<run_id>` branch; returns the base commit for the report.
 - `meta.json` per run: what the run list shows (status, request, project), updated as the run moves.
-- `resume_note`: tells the Project Manager what already happened in a stopped run.
+- `resume_fields`: how a stopped run carries on. A run cut off mid-way (`interrupted`) continues its checkpointed
+  Project Manager conversation exactly where it stopped, unless the person gives guidance; any other stopped run starts
+  a fresh conversation that begins with `resume_note` (what already happened).
 - `run_graph`: runs the team, and makes sure a run *always* ends
   with a `run_finished` event, even when something unexpected raises.
 """
@@ -13,24 +15,41 @@ import asyncio
 import json
 import re
 import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from agent.tools.workspace import Workspace, git
 
 from orchestrator.events import EventLog
-from orchestrator.task import TaskLog
+from orchestrator.task import TaskLog, mark_interrupted
 from orchestrator.team import OrchestratorState, run_team
 
 META_FILE = "meta.json"
+DANGLING_WORDS = {"a", "an", "the", "with", "for", "and", "or", "to", "of", "in", "on", "at", "by", "as", "that", "which", "from", "into"}
+FILLER_RE = re.compile(r"^(?:please|kindly|hey|hi|hello|can you|could you|would you|i (?:want|need|would like) (?:you )?to|i'd like (?:you )?to|let's|lets)\b[\s,:;-]*")
 
 
 def new_project_name(request: str, run_id: str) -> str:
     """A fresh project for one request, e.g. `calculator-in-python-c5c38465`. Every run starts from an empty folder
     unless the person picks an existing project, so a zip holds what this request produced and nothing older."""
-    words = re.findall(r"[a-z0-9]+", request.lower())
-    slug = "-".join(words)[:24].strip("-") or "run"
-    return f"{slug}-{run_id}"
+    text = request.lower().strip()
+    while (stripped := FILLER_RE.sub("", text).strip()) != text:  # drop "please", "can you"... like the UI's heading does
+        text = stripped
+    slug = ""
+    for word in re.findall(r"[a-z0-9]+", text):  # whole words only, so the name never ends mid-word
+        if len(slug) + len(word) + 1 > 31:  # name = slug + "-" + 8-char run id must stay within 40 characters
+            break
+        slug = f"{slug}-{word}" if slug else word
+    while "-" in slug and slug.rsplit("-", 1)[1] in DANGLING_WORDS:  # and never on "a", "with", "the"...
+        slug = slug.rsplit("-", 1)[0]
+    return f"{slug or 'run'}-{run_id}"
+
+
+def zip_filename(project: str, run_id: str, partial: bool = False) -> str:
+    """The name a downloaded zip gets: the project's name without the run id that keeps its folder unique."""
+    name = project.removesuffix(f"-{run_id}") or "project"
+    return f"{name}{'-partial' if partial else ''}.zip"
 
 
 def prepare_workspace(ws: Workspace, run_id: str) -> str | None:
@@ -75,9 +94,8 @@ def resume_note(log: TaskLog, guidance: str | None = None, previous_reason: str 
     """Tell the Project Manager what already happened in a stopped run, so it carries on instead of starting over.
     A delegation that was still running when the run was cut off counts as failed."""
     lines = []
+    mark_interrupted(log)
     for task in log.tasks:
-        if task.status == "in_progress":
-            task.status, task.reason = "fail", "interrupted before it finished"
         done = "passed" if task.status == "pass" else "FAILED"
         extra = f" | reason: {task.reason}" if task.status != "pass" and task.reason else ""
         lines.append(f"- {done}: {task.role}: {task.objective}{extra}")
@@ -92,11 +110,19 @@ def resume_note(log: TaskLog, guidance: str | None = None, previous_reason: str 
     return "\n".join(note)
 
 
+def resume_fields(ws: Workspace, run_id: str, log: TaskLog, guidance: str | None = None) -> dict[str, Any]:
+    """The state keys that make a run carry on: `thread_id` (and `resume_note` when a fresh conversation is needed)."""
+    meta = read_meta(ws, run_id) or {}
+    if meta.get("status") == "interrupted" and meta.get("thread_id") and not guidance:
+        return {"thread_id": meta["thread_id"]}
+    return {"thread_id": f"{run_id}-{uuid.uuid4().hex[:6]}", "resume_note": resume_note(log, guidance, meta.get("reason"))}
+
+
 async def run_graph(state: OrchestratorState) -> OrchestratorState:
     """Run the team to its end. Never raises for a failed run; always leaves `run_finished` in the event log."""
     ws, run_id = state["workspace"], state["run_id"]
     events: EventLog | None = state.get("events")
-    write_meta(ws, run_id, status="running", request=state["request"])
+    write_meta(ws, run_id, status="running", request=state["request"], thread_id=state.setdefault("thread_id", run_id))
     result: Any = state
     try:
         result = await run_team(state)

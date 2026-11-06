@@ -1,10 +1,9 @@
-"""Non-interactive CLI wiring the orchestration graph (Task 8) to persistence (Task 3) and a workspace
-(codewright's `Workspace`).
+"""Command line for the team: `run` starts a request, `resume` carries on a stopped run.
 
-`run` starts a fresh run (new `run_id`), runs the graph to completion, and exits `0` only if every task
-in the final task log is `"pass"` (anything else -- a `fail` left open, or an `escalated` task -- exits
-`1`). `resume` loads a previously saved `task_log.json` for a given `run_id` and continues the graph from
-there; a missing or malformed task log is reported clearly and exits `1` without running anything.
+`run` starts a fresh run (new `run_id`), runs the Project Manager to its end, and exits `0` only if the run passed
+(anything else -- escalated, stopped, error -- exits `1`). `resume` carries on a stopped run from its saved task
+log (and, for a run that was cut off, from the Project Manager's checkpoint); a missing or malformed task log is
+reported clearly and exits `1` without running anything.
 
 Both commands build a fresh `model`, `Workspace` and `SandboxClient` themselves -- only
 `request`/`run_id`/`task_log` ever come from a saved file, so a resumed run always talks to a live
@@ -30,13 +29,13 @@ from orchestrator.events import Event, EventLog
 from orchestrator.runner import (
     prepare_workspace,
     read_meta,
-    resume_note,
+    resume_fields,
     run_graph,
     run_path,
     write_meta,
 )
 from orchestrator.task import TaskLog, load_task_log
-from orchestrator.team import OrchestratorState
+from orchestrator.team import REASONS, OrchestratorState
 
 TASK_LOG_FILE = "task_log.json"
 
@@ -70,17 +69,6 @@ def build_model() -> BaseChatModel:
     return chat_model(client)
 
 
-def _report(task_log: TaskLog) -> tuple[bool, str]:
-    """Final status lines for every task, plus whether the run as a whole succeeded (every task `pass`)."""
-    lines = [f"- {t.role} [{t.id}]: {t.status}" for t in task_log.tasks if t.status != "superseded"]
-    all_pass = bool(task_log.tasks) and all(t.status in ("pass", "superseded") for t in task_log.tasks)
-    if any(t.status == "escalated" for t in task_log.tasks):
-        lines.append("Run escalated: a task failed and was not resolved within its retry budget.")
-    elif not all_pass:
-        lines.append("Run ended with unresolved tasks.")
-    return all_pass, "\n".join(lines)
-
-
 def _print_event(event: Event) -> None:
     """One line per event, so the terminal shows the plan, each dispatch and each replan as they happen."""
     kind = event["type"]
@@ -111,12 +99,21 @@ def _make_state(
 ) -> OrchestratorState:
     events = EventLog(run_path(workspace, run_id) / "events.jsonl", on_emit=_print_event)
 
-    async def ask(payload: dict) -> bool:
-        listing = "\n".join(f"  - {t['role']}: {t['objective']}" for t in payload["tasks"])
-        return await asyncio.to_thread(click.confirm, f"Plan:\n{listing}\nApprove?", default=True)
+    async def ask(payload: dict) -> dict:
+        listing = "\n".join(f"  - [{t['status']}] {t['content']}" for t in payload["todos"])
+        if await asyncio.to_thread(click.confirm, f"Plan:\n{listing}\nApprove?", default=True):
+            return {"approved": True}
+        feedback = await asyncio.to_thread(click.prompt, "What should change? (empty: stop the run)", default="", show_default=False)
+        return {"approved": False, "feedback": feedback}
+
+    async def ask_action(payload: dict) -> bool:
+        return await asyncio.to_thread(
+            click.confirm, f"{payload['role']} wants to run a command that {payload['reason']}:\n  {payload['command']}\nAllow it?", default=False
+        )
 
     return {
         "request": task_log.request,
+        "approve_action": ask_action,
         "workspace": workspace,
         "run_id": run_id,
         "model": build_model(),
@@ -135,10 +132,11 @@ def _events(state: OrchestratorState) -> EventLog:
     return events
 
 
-def _finish(task_log: TaskLog) -> None:
-    ok, summary = _report(task_log)
-    click.echo(summary)
-    sys.exit(0 if ok else 1)
+def _finish(result: OrchestratorState) -> None:
+    """Print how the run ended and exit 0 only if it passed."""
+    status = result.get("status", "error")
+    click.echo(f"Run {status}: {REASONS.get(result.get('end_reason') or '', result.get('end_reason') or '')}")
+    sys.exit(0 if status == "passed" else 1)
 
 
 _WORKSPACES = click.option(
@@ -171,7 +169,7 @@ def run(project: str, workspaces_root: Path, concurrency: int, approve_plan: boo
     run_id = uuid4().hex[:8]
     base = prepare_workspace(workspace, run_id)
     click.echo(f"Starting run {run_id!r} for project {project!r}: {request}")
-    config = RunConfig(concurrency=concurrency, plan_approval=approve_plan, final_review=review_result, require_plan=True)
+    config = RunConfig(concurrency=concurrency, plan_approval=approve_plan, final_review=review_result, require_plan=True, max_fix_rounds=2, model_retry_wait_s=3.0)
     state = _make_state(workspace, run_id, TaskLog(run_id=run_id, request=request, tasks=[]), config, approve_plan, base)
     if review_result:
         async def review(payload: dict) -> dict:
@@ -181,9 +179,9 @@ def run(project: str, workspaces_root: Path, concurrency: int, approve_plan: boo
 
         state["review"] = review
     _events(state).emit("run_started", run_id=run_id, project=project, request=request)
-    write_meta(workspace, run_id, project=project, request=request, status="running")
+    write_meta(workspace, run_id, project=project, request=request, status="running", plan_approval=approve_plan)
     result = asyncio.run(run_graph(state))
-    _finish(result["task_log"])
+    _finish(result)
 
 
 @cli.command()
@@ -207,11 +205,12 @@ def resume(project: str, workspaces_root: Path, run_id: str, guidance: str | Non
 
     click.echo(f"Resuming run {run_id!r} for project {project!r}.")
     meta = read_meta(workspace, run_id) or {}
-    state = _make_state(workspace, run_id, task_log, RunConfig(concurrency=concurrency, require_plan=True), False, meta.get("base_commit"))
-    state["resume_note"] = resume_note(task_log, guidance, meta.get("reason"))
+    config = RunConfig(concurrency=concurrency, require_plan=True, max_fix_rounds=2, model_retry_wait_s=3.0, plan_approval=bool(meta.get("plan_approval")))
+    state = _make_state(workspace, run_id, task_log, config, config.plan_approval, meta.get("base_commit"))
+    state.update(resume_fields(workspace, run_id, task_log, guidance))  # type: ignore[typeddict-item]
     _events(state).emit("run_resumed", run_id=run_id, guidance=guidance or "")
     result = asyncio.run(run_graph(state))
-    _finish(result["task_log"])
+    _finish(result)
 
 
 @cli.command()
