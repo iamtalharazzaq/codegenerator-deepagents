@@ -1,0 +1,212 @@
+[
+ {
+  "task": "database-schema",
+  "examples": false,
+  "rep": 4,
+  "seconds": 4.1,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration file created with up and down blocks",
+  "tool_calls": 1,
+  "shown": [],
+  "sample": {
+   "db/migrations/001_init.sql": "-- Up: Create users and tasks tables\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    username VARCHAR(255) NOT NULL UNIQUE\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL\n);\n\n-- Down: Drop tasks and users tables\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1096,
+  "max_prompt_tokens": 1307,
+  "out_tokens": 225
+ },
+ {
+  "task": "database-schema",
+  "examples": true,
+  "rep": 1,
+  "seconds": 4.5,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "Migration created with up/down for users and tasks tables",
+  "tool_calls": 1,
+  "shown": [
+   "database-two-tables"
+  ],
+  "sample": {
+   "db/migrations/001_init.sql": "-- up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    email VARCHAR(255) UNIQUE NOT NULL,\n    name VARCHAR(255) NOT NULL\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    description TEXT,\n    due_date DATE,\n    completed BOOLEAN DEFAULT FALSE\n);\n\nCREATE INDEX idx_tasks_user_id ON tasks(user_id);\n\n-- down\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1226,
+  "max_prompt_tokens": 1534,
+  "out_tokens": 321
+ },
+ {
+  "task": "database-schema",
+  "examples": true,
+  "rep": 0,
+  "seconds": 3.1,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration created with up/down and proper schema for tasks belonging to users",
+  "tool_calls": 1,
+  "shown": [
+   "database-two-tables"
+  ],
+  "sample": {
+   "db/migrations/001_init.sql": "-- up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    email VARCHAR(255) UNIQUE NOT NULL\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    description TEXT,\n    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE INDEX idx_tasks_user_id ON tasks(user_id);\n\n-- down\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1226,
+  "max_prompt_tokens": 1423,
+  "out_tokens": 216
+ },
+ {
+  "task": "database-schema",
+  "examples": false,
+  "rep": 2,
+  "seconds": 3.1,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration created with up and down",
+  "tool_calls": 1,
+  "shown": [],
+  "sample": {
+   "db/migrations/001_init.sql": "-- Up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    username VARCHAR(255) NOT NULL UNIQUE\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP\n);\n\n-- Down\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1096,
+  "max_prompt_tokens": 1303,
+  "out_tokens": 216
+ },
+ {
+  "task": "database-schema",
+  "examples": true,
+  "rep": 3,
+  "seconds": 2.6,
+  "accepted": false,
+  "valid_reply": false,
+  "quality": true,
+  "status": "fail",
+  "reason": "no status block found in the artifact",
+  "tool_calls": 1,
+  "shown": [
+   "database-two-tables"
+  ],
+  "sample": {
+   "db/migrations/001_init.sql": "-- up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    email VARCHAR(255) UNIQUE NOT NULL\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    description TEXT\n);\n\nCREATE INDEX idx_tasks_user_id ON tasks(user_id);\n\n-- down\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1226,
+  "max_prompt_tokens": 1399,
+  "out_tokens": 163
+ },
+ {
+  "task": "database-schema",
+  "examples": false,
+  "rep": 0,
+  "seconds": 3.4,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration created with up and down blocks for users and tasks tables.",
+  "tool_calls": 1,
+  "shown": [],
+  "sample": {
+   "db/migrations/001_init.sql": "-- Up: Create users and tasks tables with relationship\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    name VARCHAR(255) NOT NULL\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL,\n    title VARCHAR(255) NOT NULL,\n    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE\n);\n\n-- Down: Drop tasks and users tables\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1096,
+  "max_prompt_tokens": 1322,
+  "out_tokens": 221
+ },
+ {
+  "task": "database-schema",
+  "examples": true,
+  "rep": 4,
+  "seconds": 3.0,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration file created with up and down sections for users and tasks tables",
+  "tool_calls": 1,
+  "shown": [
+   "database-two-tables"
+  ],
+  "sample": {
+   "db/migrations/001_init.sql": "-- up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    email VARCHAR(255) UNIQUE NOT NULL\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    description TEXT\n);\n\nCREATE INDEX idx_tasks_user_id ON tasks(user_id);\n\n-- down\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1226,
+  "max_prompt_tokens": 1412,
+  "out_tokens": 204
+ },
+ {
+  "task": "database-schema",
+  "examples": false,
+  "rep": 3,
+  "seconds": 3.1,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration file created with up and down blocks",
+  "tool_calls": 1,
+  "shown": [],
+  "sample": {
+   "db/migrations/001_init.sql": "-- up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    username VARCHAR(255) NOT NULL UNIQUE,\n    email VARCHAR(255) NOT NULL UNIQUE\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    completed BOOLEAN NOT NULL DEFAULT FALSE\n);\n\n-- down\nDROP TABLE tasks;\nDROP TABLE users;\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1096,
+  "max_prompt_tokens": 1288,
+  "out_tokens": 201
+ },
+ {
+  "task": "database-schema",
+  "examples": false,
+  "rep": 1,
+  "seconds": 3.8,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": false,
+  "status": "pass",
+  "reason": "migration file created with up and down parts for users and tasks tables",
+  "tool_calls": 1,
+  "shown": [],
+  "sample": {
+   "db/migrations/001_init.sql": "-- Create users table\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    username VARCHAR(255) NOT NULL UNIQUE,\n    email VARCHAR(255) NOT NULL\n);\n\n-- Create tasks table with foreign key to users\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    title VARCHAR(255) NOT NULL,\n    description TEXT,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE\n);\n"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1096,
+  "max_prompt_tokens": 1282,
+  "out_tokens": 277
+ },
+ {
+  "task": "database-schema",
+  "examples": true,
+  "rep": 2,
+  "seconds": 4.5,
+  "accepted": true,
+  "valid_reply": true,
+  "quality": true,
+  "status": "pass",
+  "reason": "migration file created with up (creates users, tasks, index) and down (drops tables)",
+  "tool_calls": 1,
+  "shown": [
+   "database-two-tables"
+  ],
+  "sample": {
+   "db/migrations/001_init.sql": "-- up\nCREATE TABLE users (\n    id SERIAL PRIMARY KEY,\n    email VARCHAR(255) UNIQUE NOT NULL,\n    name VARCHAR(255) NOT NULL,\n    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n\nCREATE TABLE tasks (\n    id SERIAL PRIMARY KEY,\n    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,\n    title VARCHAR(255) NOT NULL,\n    description TEXT,\n    status VARCHAR(50) NOT NULL DEFAULT 'pending',\n    due_date DATE,\n    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP\n);\n\nCREA"
+  },
+  "calls": 2,
+  "first_prompt_tokens": 1226,
+  "max_prompt_tokens": 1578,
+  "out_tokens": 353
+ }
+]

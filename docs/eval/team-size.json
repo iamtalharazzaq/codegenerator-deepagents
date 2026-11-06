@@ -1,0 +1,144 @@
+[
+ {
+  "request": "Make a calculator",
+  "rep": 0,
+  "status": "passed",
+  "reason": "all_passed",
+  "seconds": 65,
+  "specialists": [
+   "backend_developer",
+   "qa_engineer"
+  ],
+  "tasks": 4,
+  "files": [
+   ".pytest_cache/.gitignore",
+   ".pytest_cache/CACHEDIR.TAG",
+   ".pytest_cache/README.md",
+   ".pytest_cache/v/cache/nodeids",
+   "calculator.py",
+   "test_calculator.py"
+  ],
+  "examples": [
+   "qa-tests-for-a-function"
+  ]
+ },
+ {
+  "request": "Write a Python function that reverses a string, with a test",
+  "rep": 0,
+  "status": "passed",
+  "reason": "all_passed",
+  "seconds": 20,
+  "specialists": [
+   "backend_developer",
+   "qa_engineer"
+  ],
+  "tasks": 2,
+  "files": [
+   ".pytest_cache/.gitignore",
+   ".pytest_cache/CACHEDIR.TAG",
+   ".pytest_cache/README.md",
+   ".pytest_cache/v/cache/lastfailed",
+   ".pytest_cache/v/cache/nodeids",
+   "reverse_string.py",
+   "test_reverse_string.py"
+  ],
+  "examples": [
+   "backend-small-module",
+   "qa-tests-for-a-function"
+  ]
+ },
+ {
+  "request": "Create a small command-line todo list in Python",
+  "rep": 0,
+  "status": "passed",
+  "reason": "all_passed",
+  "seconds": 45,
+  "specialists": [
+   "backend_developer",
+   "qa_engineer"
+  ],
+  "tasks": 3,
+  "files": [
+   ".pytest_cache/.gitignore",
+   ".pytest_cache/CACHEDIR.TAG",
+   ".pytest_cache/README.md",
+   ".pytest_cache/v/cache/lastfailed",
+   ".pytest_cache/v/cache/nodeids",
+   "test_todo_cli.py",
+   "todo_cli.py"
+  ],
+  "examples": [
+   "backend-small-module",
+   "qa-tests-for-a-function"
+  ]
+ },
+ {
+  "request": "Make a calculator",
+  "rep": 1,
+  "status": "passed",
+  "reason": "all_passed",
+  "seconds": 25,
+  "specialists": [
+   "backend_developer",
+   "qa_engineer"
+  ],
+  "tasks": 3,
+  "files": [
+   ".pytest_cache/.gitignore",
+   ".pytest_cache/CACHEDIR.TAG",
+   ".pytest_cache/README.md",
+   ".pytest_cache/v/cache/nodeids",
+   "calculator.py",
+   "test_calculator.py"
+  ],
+  "examples": [
+   "backend-small-module",
+   "qa-tests-for-a-function"
+  ]
+ },
+ {
+  "request": "Write a Python function that reverses a string, with a test",
+  "rep": 1,
+  "status": "passed",
+  "reason": "all_passed",
+  "seconds": 34,
+  "specialists": [
+   "backend_developer",
+   "qa_engineer"
+  ],
+  "tasks": 4,
+  "files": [
+   ".pytest_cache/.gitignore",
+   ".pytest_cache/CACHEDIR.TAG",
+   ".pytest_cache/README.md",
+   ".pytest_cache/v/cache/nodeids",
+   "reverse_string.py",
+   "test_reverse_string.py"
+  ],
+  "examples": [
+   "backend-small-module",
+   "qa-code-is-wrong",
+   "qa-tests-for-a-function"
+  ]
+ },
+ {
+  "request": "Create a small command-line todo list in Python",
+  "rep": 1,
+  "status": "passed",
+  "reason": "all_passed",
+  "seconds": 53,
+  "specialists": [
+   "backend_developer",
+   "qa_engineer"
+  ],
+  "tasks": 2,
+  "files": [
+   "test_todo.py",
+   "todo.py"
+  ],
+  "examples": [
+   "backend-small-module",
+   "qa-tests-for-a-function"
+  ]
+ }
+]
