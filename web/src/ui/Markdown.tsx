@@ -10,15 +10,19 @@ function Inline({ text }: { text: string }) {
   );
 }
 
+/** Renders report markdown as elements (nothing is injected as HTML). Styled by `.md` in styles.css. */
 export function Markdown({ text }: { text: string }) {
   return (
     <div className="md">
       {parseMarkdown(text).map((b, i) => {
         switch (b.type) {
-          case "heading": return b.level === 1 ? <h2 key={i}><Inline text={b.text} /></h2> : <h3 key={i}><Inline text={b.text} /></h3>;
+          case "heading": return b.level === 1 ? <h2 key={i}><Inline text={b.text} /></h2> : b.level === 2 ? <h2 key={i}><Inline text={b.text} /></h2> : b.level === 3 ? <h3 key={i}><Inline text={b.text} /></h3> : <h4 key={i}><Inline text={b.text} /></h4>;
           case "para": return <p key={i}><Inline text={b.text} /></p>;
-          case "list": return <ul key={i}>{b.items.map((it, j) => <li key={j}><Inline text={it} /></li>)}</ul>;
-          case "code": return <pre key={i}>{b.text}</pre>;
+          case "list": {
+            const items = b.items.map((it, j) => <li key={j}><Inline text={it} /></li>);
+            return b.ordered ? <ol key={i}>{items}</ol> : <ul key={i}>{items}</ul>;
+          }
+          case "code": return <pre key={i}><code>{b.text}</code></pre>;
           case "table":
             return (
               <div className="table-wrap" key={i}>

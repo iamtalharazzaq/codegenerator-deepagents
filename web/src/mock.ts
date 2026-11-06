@@ -2,6 +2,7 @@
  * They are event logs, replayed through the same reducer as a live run, so what you see is what a real run produces. */
 
 import type { RunRow } from "./api";
+import type { DataSource } from "./data";
 import { replay, type RunEvent, type RunView } from "./model";
 
 const T0 = 1_760_000_000;
@@ -31,6 +32,7 @@ const TODO = {
   sa2: "Solution Architect: design the architecture (retry with a stricter objective)",
   be: "Backend Developer: implement the calculator logic",
   be2: "Backend Developer: implement the calculator logic in backend/ (retry)",
+  be3: "Backend Developer: finish and verify backend/ (needs guidance)",
   fe: "Frontend Developer: build the keypad and display",
   qa: "QA Engineer: write and run the tests",
   ops: "DevOps Engineer: build and package the app",
@@ -93,6 +95,8 @@ function escalated(): RunEvent[] {
 
   work(log, { id: "d90a41be", role: "backend_developer", objective: "Implement the calculator logic in backend/", writes: ["backend/**"], attempt: 2 },
     { seconds: 130, tools: [["write_file", "backend/calculator/engine.js"], ["write_file", "backend/server.js"], ["read_file", "backend/server.js"]], guard: { path: "/calculation_engine.js", reason: "outside this task's write scope (backend/**)" }, fail: recursion });
+  log.emit("pm_said", 2, { text: "The backend failed twice with the same step-limit error, so retrying it a third time would repeat the failure. I am stopping here: the files in backend/ may already be close to done, and a person can say whether to finish them or start that area again." });
+  log.emit("todos_updated", 1, { todos: todos([[TODO.ba, "completed"], [TODO.pm, "completed"], [TODO.sa2, "completed"], [TODO.be3, "in_progress"], [TODO.fe, "pending"], [TODO.qa, "pending"], [TODO.ops, "pending"]]) });
   log.emit("run_finished", 1, {
     status: "escalated", reason: "pm_failed", message: "The Project Manager reported that the work did not finish.",
     tasks: { pass: 3, fail: 3 }, dispatches: 6, seconds: 421,
@@ -101,20 +105,54 @@ function escalated(): RunEvent[] {
   return log.events;
 }
 
+const CALCULATOR_SUMMARY = [
+  "## Summary",
+  "",
+  "A **responsive calculator** that runs in the browser with no build step. All three tasks passed on the first try and the 12 tests are green.",
+  "",
+  "### What was built",
+  "",
+  "- **Solution Architect:** a one-page design in `docs/architecture.md` and a `README.md` with run instructions.",
+  "- **Frontend Developer:** the keypad and display (`index.html`, `styles.css`, `app.js`) on top of a pure `calculator.js` engine.",
+  "- **QA Engineer:** 12 tests for the engine in `calculator.test.js`.",
+  "",
+  "### Run it",
+  "",
+  "1. Unzip the delivery.",
+  "2. Open `index.html` in a browser.",
+  "3. Run the tests with the command below.",
+  "",
+  "```",
+  "node --test calculator.test.js",
+  "# tests 12 | pass 12 | fail 0",
+  "```",
+  "",
+  "### Decisions",
+  "",
+  "| Area | Decision |",
+  "|---|---|",
+  "| Division by zero | shows `Error`; `C` clears it |",
+  "| Precision | results are rounded to 10 decimal places |",
+].join("\n");
+
 function passed(): RunEvent[] {
   const log = new Log();
-  log.emit("run_started", 0, { run_id: "a50a01c8", project: "demo", request: "Create greet.py with greet(name) and a pytest test", concurrency: 1, max_dispatches: 20 });
+  log.emit("run_started", 0, { run_id: "a50a01c8", project: "calculator-a50a01c8", request: "make a calculator", plan_approval: false, concurrency: 1, max_dispatches: 20 });
   log.emit("plan_started", 1);
-  log.emit("todos_updated", 3, { todos: todos([["Solution Architect: define the interface", "in_progress"], ["Backend Developer: write greet.py", "pending"], ["QA Engineer: write and run the tests", "pending"]]) });
-  work(log, { id: "66e3a943", role: "solution_architect", objective: "Define the interface of greet()", writes: ["docs/interface.md"], attempt: 1 }, { seconds: 9, tools: [["write_file", "docs/interface.md"]] });
-  log.emit("todos_updated", 1, { todos: todos([["Solution Architect: define the interface", "completed"], ["Backend Developer: write greet.py", "in_progress"], ["QA Engineer: write and run the tests", "pending"]]) });
-  work(log, { id: "7cd0d475", role: "backend_developer", objective: "Implement greet(name)", writes: ["greet.py"], attempt: 1 }, { seconds: 12, tools: [["write_file", "greet.py"]] });
-  log.emit("todos_updated", 1, { todos: todos([["Solution Architect: define the interface", "completed"], ["Backend Developer: write greet.py", "completed"], ["QA Engineer: write and run the tests", "in_progress"]]) });
-  work(log, { id: "771890a1", role: "qa_engineer", objective: "Write and run pytest tests for greet()", writes: ["test_greet.py"], attempt: 1 }, { seconds: 31, tools: [["write_file", "test_greet.py"], ["run_tests", "pytest -q"]] });
-  log.emit("todos_updated", 1, { todos: todos([["Solution Architect: define the interface", "completed"], ["Backend Developer: write greet.py", "completed"], ["QA Engineer: write and run the tests", "completed"]]) });
+  const items = (a: Status, b: Status, c: Status) => todos([["Solution Architect: design the calculator and write the README", a], ["Frontend Developer: build the keypad, display and engine", b], ["QA Engineer: write and run the engine tests", c]]);
+  log.emit("todos_updated", 3, { todos: items("in_progress", "pending", "pending") });
+  work(log, { id: "66e3a943", role: "solution_architect", objective: "Design the calculator: components, the engine interface and the README", writes: ["docs/architecture.md", "README.md"], attempt: 1 },
+    { seconds: 8, tools: [["write_file", "docs/architecture.md"], ["write_file", "README.md"]] });
+  log.emit("todos_updated", 1, { todos: items("completed", "in_progress", "pending") });
+  work(log, { id: "7cd0d475", role: "frontend_developer", objective: "Build the keypad and display on top of a pure calculator engine", writes: ["index.html", "styles.css", "app.js", "calculator.js"], attempt: 1 },
+    { seconds: 14, tools: [["write_file", "calculator.js"], ["write_file", "index.html"], ["write_file", "styles.css"], ["write_file", "app.js"]] });
+  log.emit("todos_updated", 1, { todos: items("completed", "completed", "in_progress") });
+  work(log, { id: "771890a1", role: "qa_engineer", objective: "Write and run tests for the calculator engine", writes: ["calculator.test.js"], attempt: 1 },
+    { seconds: 11, tools: [["write_file", "calculator.test.js"], ["run_tests", "node --test calculator.test.js"]] });
+  log.emit("todos_updated", 1, { todos: items("completed", "completed", "completed") });
   log.emit("report_ready", 1, { path: "report.md" });
-  log.emit("delivery_ready", 1, { path: "delivery.zip", files: 5, partial: false });
-  log.emit("run_finished", 1, { status: "passed", reason: "all_passed", message: "All tasks passed.", tasks: { pass: 3 }, dispatches: 3, seconds: 58, summary: "greet.py returns \"Hello, <name>!\" and 15 pytest tests pass." });
+  log.emit("delivery_ready", 1, { path: "delivery.zip", files: 7, partial: false });
+  log.emit("run_finished", 1, { status: "passed", reason: "all_passed", message: "All tasks passed.", tasks: { pass: 3 }, dispatches: 3, seconds: 43, summary: CALCULATOR_SUMMARY });
   return log.events;
 }
 
@@ -147,7 +185,7 @@ function review(): RunEvent[] {
   const cut = all.findIndex((e) => e.type === "report_ready");
   const log = new Log();
   log.seq = all[cut - 1].seq; log.at = all[cut - 1].ts; log.events = all.slice(0, cut);
-  log.emit("review_requested", 1, { round: 1, summary: "greet.py returns \"Hello, <name>!\" and 15 pytest tests pass.", files: ["greet.py", "test_greet.py", "docs/interface.md"] });
+  log.emit("review_requested", 1, { round: 1, summary: CALCULATOR_SUMMARY, files: ["README.md", "app.js", "calculator.js", "calculator.test.js", "docs/architecture.md", "index.html", "styles.css"] });
   return log.events;
 }
 
@@ -168,13 +206,21 @@ export function mockView(name: MockName): RunView {
 }
 
 export function mockRuns(): RunRow[] {
-  const row = (run_id: string, request: string, status: string, done: number, total: number, age: number): RunRow => ({
-    run_id, project: "demo", request, status, reason: null, created_at: T0 - age, tasks_done: done, tasks_total: total,
+  const now = Date.now() / 1000;
+  const row = (run_id: string, request: string, status: string, done: number, total: number, ageMinutes: number): RunRow => ({
+    run_id, project: "demo", request, status, reason: null, created_at: now - ageMinutes * 60, tasks_done: done, tasks_total: total,
   });
+  const long = "Build a command-line todo manager in Python with add, list, done and delete commands, JSON storage, colourised output and a full pytest suite";
+  const ago = (h: number) => h * 60;
+  const startOfToday = new Date().setHours(0, 0, 0, 0) / 1000;
+  const sinceMidnight = Math.max(1, (now - startOfToday) / 60);
   return [
-    row("d2463e52", "Make a calculator", "escalated", 3, 7, 0),
-    row("a50a01c8", "Create greet.py with greet(name) and a pytest test", "passed", 3, 3, 3600),
-    row("0b53cbea", "Hey", "stopped", 0, 1, 7200),
+    row("d2463e52", "Make a calculator", "escalated", 3, 7, 2),
+    row("a50a01c8", "make a calculator", "passed", 3, 3, Math.min(sinceMidnight - 1, 95)),
+    row("0b53cbea", long, "stopped", 0, 1, sinceMidnight + 60),
+    row("c7e1b02a", long, "passed", 5, 5, sinceMidnight + ago(26)),
+    row("f10d9a44", "Add a password reset flow to the login page", "passed", 4, 4, sinceMidnight + ago(52)),
+    row("9b2c33e7", "Create greet.py with greet(name) and a pytest test", "passed", 3, 3, sinceMidnight + ago(24 * 9)),
   ];
 }
 
@@ -182,4 +228,68 @@ export function mockFromUrl(search: string): MockName | null {
   const value = new URLSearchParams(search).get("mock");
   const names = ["escalated", "running", "passed", "planning", "approval", "review"];
   return value !== null && names.includes(value) ? (value as MockName) : value === "" ? "escalated" : null;
+}
+
+// ------------------------------------------------------------------ what the server would return for reports, results and files
+
+const FILES: Record<string, string> = {
+  "calculator.js": [
+    "// The engine: pure functions, no DOM, so it is easy to test.",
+    "export function evaluate(a, op, b) {",
+    "  if (op === \"/\" && b === 0) return \"Error\";",
+    "  const result = { \"+\": a + b, \"-\": a - b, \"*\": a * b, \"/\": a / b }[op];",
+    "  return Number(result.toFixed(10));",
+    "}",
+  ].join("\n"),
+  "index.html": [
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "  <head><meta charset=\"utf-8\" /><title>Calculator</title><link rel=\"stylesheet\" href=\"styles.css\" /></head>",
+    "  <body>",
+    "    <main class=\"calc\"><output id=\"display\">0</output><div id=\"keys\"></div></main>",
+    "    <script type=\"module\" src=\"app.js\"></script>",
+    "  </body>",
+    "</html>",
+  ].join("\n"),
+  "calculator.test.js": [
+    "import test from \"node:test\";",
+    "import assert from \"node:assert/strict\";",
+    "import { evaluate } from \"./calculator.js\";",
+    "",
+    "test(\"adds\", () => assert.equal(evaluate(2, \"+\", 3), 5));",
+    "test(\"divides by zero without throwing\", () => assert.equal(evaluate(1, \"/\", 0), \"Error\"));",
+    "test(\"rounds floating point noise\", () => assert.equal(evaluate(0.1, \"+\", 0.2), 0.3));",
+  ].join("\n"),
+  "styles.css": ".calc { max-width: 320px; margin: 4rem auto; font: 16px system-ui; }\n#display { display: block; padding: 1rem; text-align: right; font-size: 2rem; }",
+  "app.js": "import { evaluate } from \"./calculator.js\";\n\nconst display = document.querySelector(\"#display\");\nlet left = null, op = null, typing = \"0\";",
+  "README.md": "# Calculator\n\nOpen `index.html` in a browser. Run the tests with `node --test calculator.test.js`.",
+  "docs/architecture.md": "# Architecture\n\nTwo layers: `calculator.js` is a pure engine, `app.js` wires it to the keypad and display.",
+  "docs/requirements.md": "# Requirements\n\n- Add, subtract, multiply and divide\n- Clear and decimal point\n- Division by zero shows an error",
+  "docs/user_stories.md": "# User stories\n\n1. As a user I can enter a sum with the keypad.\n2. As a user I can clear the display.",
+  "architecture_design.md": "# Architecture\n\nA Node server exposes `POST /calculate`; the engine lives in `backend/calculator/engine.js`.",
+  "backend/calculator/engine.js": "export function calculate(a, op, b) {\n  return { \"+\": a + b, \"-\": a - b, \"*\": a * b, \"/\": a / b }[op];\n}",
+  "backend/server.js": "import http from \"node:http\";\nimport { calculate } from \"./calculator/engine.js\";",
+};
+
+const REPORT_TAIL = (v: RunView) => [
+  "", "## Tasks", "", "| Role | Try | Result |", "|---|---|---|",
+  ...v.tasks.map((t) => `| ${t.role.replace(/_/g, " ")} | ${t.attempt} | ${t.status === "pass" ? "pass" : "fail"} |`),
+].join("\n");
+
+/** The mock stand-in for the server's report, task result and file endpoints, so every drawer and preview has real content. */
+export function mockSource(name: MockName): DataSource {
+  const view = mockView(name);
+  return {
+    report: async () => `# Run ${view.runId}: ${view.status}\n\n**Request:** ${view.request}\n\n${view.finished?.summary ?? view.finished?.message ?? ""}${REPORT_TAIL(view)}`,
+    artifact: async (_runId, artifactName) => {
+      const task = view.tasks.find((t) => artifactName === `${t.id}.attempt${t.attempt}.md`);
+      if (!task) throw new Error("The result file is not there.");
+      return `## ${task.role.replace(/_/g, " ")}, try ${task.attempt}\n\n${task.objective}\n\n${task.status === "pass" ? "Finished. " : ""}${task.reason}`;
+    },
+    file: async (_runId, path) => {
+      const body = FILES[path.replace(/^\/+/, "")];
+      if (body === undefined) throw new Error("That file is not available.");
+      return body;
+    },
+  };
 }

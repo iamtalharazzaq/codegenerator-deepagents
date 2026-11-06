@@ -12,7 +12,7 @@ export interface RunEvent {
   [key: string]: any;
 }
 
-export type RunStatus = "idle" | "running" | "passed" | "escalated" | "stopped" | "error" | "interrupted";
+export type RunStatus = "idle" | "running" | "needs_approval" | "passed" | "escalated" | "stopped" | "error" | "interrupted";
 export type PmState = "idle" | "planning" | "approval" | "waiting" | "checking" | "done" | "stopped";
 /** The one status vocabulary used everywhere: chips, graph nodes, list rows. */
 export type UiStatus = "passed" | "running" | "queued" | "blocked" | "failed" | "escalated" | "idle";
@@ -94,6 +94,13 @@ export interface Finished {
   seconds: number;
 }
 
+/** A file an agent wrote during the run, with the task that wrote it. */
+export interface FileEntry {
+  path: string;
+  taskId: string;
+  role: string;
+}
+
 export interface Review {
   round: number;
   summary: string;
@@ -109,6 +116,7 @@ export interface RunView {
   pm: PmState;
   check: "pass" | "fail" | null;
   tasks: TaskView[];
+  files: FileEntry[];
   todos: Todo[];
   todoChanges: TodoChange[];
   pmNotes: PmNote[];
@@ -132,7 +140,7 @@ export interface RunView {
 
 export function emptyRun(): RunView {
   return {
-    runId: null, project: "", request: "", status: "idle", pm: "idle", check: null, tasks: [], todos: [],
+    runId: null, project: "", request: "", status: "idle", pm: "idle", check: null, tasks: [], files: [], todos: [],
     review: null, todoChanges: [], pmNotes: [], chat: [], guardrails: [], pulses: [], awaitingApproval: false, dispatches: 0, maxDispatches: 20,
     concurrency: 1, zip: null, secretBlock: null, finished: null, log: [], lastSaid: "", startedAt: 0, endedAt: null,
     lastEvent: "", lastSeq: 0,
@@ -213,6 +221,8 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       return { ...s, todos: e.todos ?? s.todos, pm: "approval", awaitingApproval: true };
     case "plan_approved":
       return { ...s, awaitingApproval: false, pm: "idle" };
+    case "plan_changes_requested": // the plan went back to the Project Manager; the revised plan comes back for approval
+      return { ...s, awaitingApproval: false, pm: "planning", chat: [...s.chat, { kind: "user", seq: e.seq, text: `Changes to the plan: ${e.text}` }] };
     case "plan_rejected":
       return { ...s, awaitingApproval: false, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "info", text: "You rejected the plan." }] };
     case "review_requested":
@@ -220,9 +230,13 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
     case "review_accepted":
       return { ...s, review: null, pm: "idle" };
     case "review_changes_requested":
-      return { ...s, review: null, pm: "idle", chat: [...s.chat, { kind: "user", seq: e.seq, text: e.text }] };
+      return { ...s, review: null, pm: "planning", chat: [...s.chat, { kind: "user", seq: e.seq, text: e.text }] };
     case "pm_nudged":
       return { ...s, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: "The Project Manager ended without delegating anything, so it was asked once to delegate." }] };
+    case "retry_requested":
+      return { ...s, pm: "planning", chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: `Re-planning (round ${e.round ?? 1}): failed work was sent back to the Project Manager to fix.\n${e.message ?? ""}` }] };
+    case "plan_revised":
+      return { ...s, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: e.message ?? "The Project Manager changed the plan after work started." }] };
     case "plan_warning":
       return { ...s, chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: e.message }] };
     case "task_started": {
@@ -231,7 +245,12 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
     }
     case "tool_call": {
       const line = `${e.tool} ${e.summary ?? ""}`.trim();
-      return { ...s, tasks: s.tasks.map((t) => (t.id === e.task_id ? { ...t, toolLines: [...t.toolLines, line].slice(-12) } : t)) };
+      const writes = (e.tool === "write_file" || e.tool === "edit_file") && e.summary && !s.files.some((f) => f.path === e.summary);
+      return {
+        ...s,
+        files: writes ? [...s.files, { path: String(e.summary), taskId: e.task_id, role: e.role }] : s.files,
+        tasks: s.tasks.map((t) => (t.id === e.task_id ? { ...t, toolLines: [...t.toolLines, line].slice(-12) } : t)),
+      };
     }
     case "tool_result":
       return s;
@@ -239,7 +258,8 @@ export function applyEvent(state: RunView, e: RunEvent): RunView {
       const hit: GuardrailHit = { seq: e.seq, kind: e.kind, reason: e.reason ?? "", role: e.role, path: e.path, taskId: e.task_id };
       const secret = e.kind === "secret_scan" ? hit : s.secretBlock;
       const owned = !!e.task_id && s.tasks.some((t) => t.id === e.task_id);
-      if (owned) return { ...s, secretBlock: secret, tasks: s.tasks.map((t) => (t.id === e.task_id ? { ...t, guardrails: [...t.guardrails, hit] } : t)) };
+      const files = e.path ? s.files.filter((f) => !(f.taskId === e.task_id && f.path === e.path)) : s.files; // a blocked write wrote nothing
+      if (owned) return { ...s, files, secretBlock: secret, tasks: s.tasks.map((t) => (t.id === e.task_id ? { ...t, guardrails: [...t.guardrails, hit] } : t)) };
       return { ...s, secretBlock: secret, guardrails: [...s.guardrails, hit], chat: [...s.chat, { kind: "note", seq: e.seq, tone: "warn", text: `Guardrail: ${guardrailText(hit)}` }] };
     }
     case "task_blocked":
@@ -293,6 +313,7 @@ export const isResumable = (status: RunStatus) => ["escalated", "stopped", "erro
 export function runUi(status: RunStatus): UiStatus {
   switch (status) {
     case "running": return "running";
+    case "needs_approval": return "blocked";
     case "passed": return "passed";
     case "escalated": return "escalated";
     case "error": return "failed";
@@ -302,7 +323,7 @@ export function runUi(status: RunStatus): UiStatus {
 }
 
 export const RUN_LABEL: Record<RunStatus, string> = {
-  idle: "No run", running: "Running", passed: "Passed", escalated: "Escalated", stopped: "Stopped", error: "Failed", interrupted: "Interrupted",
+  idle: "No run", running: "Running", needs_approval: "Needs approval", passed: "Passed", escalated: "Escalated", stopped: "Stopped", error: "Failed", interrupted: "Interrupted",
 };
 
 /** The latest delegation of each specialist decides how that specialist looks. */
@@ -450,4 +471,156 @@ export function repeatsEarlier(view: RunView, task: TaskView): number | null {
   if (task.status !== "fail" || !task.reason) return null;
   const earlier = view.tasks.filter((t) => t.role === task.role && t.attempt < task.attempt && t.reason === task.reason);
   return earlier.length ? earlier[0].attempt : null;
+}
+
+// ------------------------------------------------------------------ selectors for the redesigned screen
+
+/** How many delegations were repeats of an earlier try. */
+export const retries = (view: RunView): number => view.tasks.filter((t) => t.attempt > 1).length;
+
+export type LogLevel = "info" | "warn" | "error";
+/** A guardrail hit is a warning (the guardrail did its job); other failures are errors. */
+export const levelOf = (e: LogEntry): LogLevel => (e.group === "guard" ? "warn" : e.error ? "error" : "info");
+
+export const guardrailsOfRole = (view: RunView, role: string): GuardrailHit[] => view.tasks.filter((t) => t.role === role).flatMap((t) => t.guardrails);
+
+/** Every guardrail hit of the run: those that belong to a task and those that belong to the run (dispatch cap, secret scan). */
+export const allGuardrails = (view: RunView): GuardrailHit[] => [...view.tasks.flatMap((t) => t.guardrails), ...view.guardrails].sort((a, b) => a.seq - b.seq);
+
+export type TimelineItem =
+  | FeedItem
+  | { kind: "pm"; seq: number; text: string; replan: boolean };
+
+/** The activity timeline: what the person said, the Project Manager's reasoning (collapsed in the UI) and the delegations in order. */
+export function timeline(view: RunView): TimelineItem[] {
+  const notes: TimelineItem[] = view.pmNotes.map((n, i) => ({ kind: "pm", seq: n.seq, text: n.text, replan: i > 0 }));
+  return [...feed(view), ...notes].sort((a, b) => a.seq - b.seq);
+}
+
+export interface LaneNode {
+  key: string;
+  role: string;
+  task?: TaskView;
+  ui: UiStatus;
+  tries: number;
+  /** the specialist this one is waiting on, when it cannot start */
+  blockedBy?: string;
+}
+
+export interface Lane {
+  index: number;
+  label: string;
+  parallel: boolean;
+  nodes: LaneNode[];
+}
+
+/** The dependency swimlane: one stage per wave of delegations (a stage starts after the one above it finished), then a
+ * last stage with the planned specialists that never started, each naming the specialist that blocked it. */
+export function swimlane(view: RunView): Lane[] {
+  const lanes: Lane[] = waves(view.tasks).map((w) => ({
+    index: w.index,
+    label: w.parallel ? `Stage ${w.index}: ${w.tasks.length} at once` : `Stage ${w.index}`,
+    parallel: w.parallel,
+    nodes: w.tasks.map((t) => ({ key: t.id, role: t.role, task: t, ui: taskUi(view, t), tries: t.attempt })),
+  }));
+  const started = new Set(view.tasks.map((t) => t.role));
+  const waiting = [...new Set(view.todos.filter((t) => t.status !== "completed").map((t) => roleOfTodo(t.content)).filter((r): r is string => !!r && !started.has(r)))];
+  if (waiting.length) {
+    const blocker = attention(view)?.role;
+    lanes.push({
+      index: lanes.length + 1, label: `Stage ${lanes.length + 1}: not started`, parallel: waiting.length > 1,
+      nodes: waiting.map((role) => ({ key: `wait-${role}`, role, ui: agentUi(view, role), tries: 0, blockedBy: blocker && blocker !== role ? blocker : undefined })),
+    });
+  }
+  return lanes;
+}
+
+export interface FileNode {
+  name: string;
+  path: string;
+  file?: FileEntry;
+  children: FileNode[];
+}
+
+/** The written files as a folder tree (folders first, then files, both alphabetical). */
+export function fileTree(files: string[], entries: FileEntry[] = []): FileNode[] {
+  const root: FileNode = { name: "", path: "", children: [] };
+  for (const raw of files) {
+    const parts = raw.replace(/^\/+/, "").split("/").filter(Boolean);
+    let at = root;
+    parts.forEach((name, i) => {
+      const path = parts.slice(0, i + 1).join("/");
+      let next = at.children.find((c) => c.name === name);
+      if (!next) {
+        next = { name, path, children: [] };
+        at.children.push(next);
+      }
+      if (i === parts.length - 1) next.file = entries.find((f) => f.path.replace(/^\/+/, "") === path);
+      at = next;
+    });
+  }
+  const sort = (n: FileNode) => {
+    n.children.sort((a, b) => Number(b.children.length > 0) - Number(a.children.length > 0) || a.name.localeCompare(b.name));
+    n.children.forEach(sort);
+  };
+  sort(root);
+  return root.children;
+}
+
+/** Every file of the run: those written by agents, or (for a run waiting for review) the review's list. */
+export function runFiles(view: RunView): string[] {
+  const written = view.files.map((f) => f.path.replace(/^\/+/, ""));
+  return [...new Set([...written, ...(view.review?.files ?? [])])];
+}
+
+export type RunGroup = "Today" | "Yesterday" | "Earlier";
+
+/** Which sidebar group a run belongs to, by calendar day in the viewer's time zone. */
+export function groupOf(createdAt: number, now = Date.now() / 1000): RunGroup {
+  const day = (t: number) => new Date(t * 1000).setHours(0, 0, 0, 0);
+  const diff = Math.round((day(now) - day(createdAt)) / 86_400_000);
+  return diff <= 0 ? "Today" : diff === 1 ? "Yesterday" : "Earlier";
+}
+
+export function relativeTime(createdAt: number, now = Date.now() / 1000): string {
+  const s = Math.max(0, now - createdAt);
+  if (s < 45) return "just now";
+  if (s < 3600) return `${Math.max(1, Math.round(s / 60))}m ago`;
+  if (s < 86_400) return `${Math.round(s / 3600)}h ago`;
+  if (s < 7 * 86_400) return `${Math.round(s / 86_400)}d ago`;
+  return new Date(createdAt * 1000).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+/** One entry per planned task (or per specialist when there is no plan yet), for the segmented progress bar. */
+export function segments(view: RunView): UiStatus[] {
+  if (view.todos.length) return view.todos.map((t) => todoUi(view, t));
+  return [...new Set(view.tasks.map((t) => t.role))].map((r) => agentUi(view, r));
+}
+
+/** True while the agents are actually working. A run waiting for the person's plan decision or review is not working. */
+export const isWorking = (view: RunView): boolean => view.status === "running" && !view.awaitingApproval && !view.review;
+
+/** The chip for the top bar: a run waiting on a person is "Needs approval", not "Running". */
+export function headline(view: RunView): { ui: UiStatus; label: string } {
+  if (view.status === "running" && (view.review || view.awaitingApproval)) return { ui: "blocked", label: RUN_LABEL.needs_approval };
+  return { ui: runUi(view.status), label: RUN_LABEL[view.status] };
+}
+
+const FILLER = /^(?:please|kindly|hey|hi|hello|can you|could you|would you|i (?:want|need|would like) (?:you )?to|i'd like (?:you )?to|let's|lets)\b[\s,:;-]*/i;
+const TITLE_CHARS = 56;
+const DANGLING = /\s(?:a|an|the|with|for|and|or|to|of|in|on|at|by|as|that|which|from|into)$/i;
+
+/** A short heading for a run, made from its prompt: filler words dropped, the first sentence, cut at a word boundary.
+ * The whole prompt stays available (sidebar tooltip, top of the Activity pane). */
+export function runTitle(request: string, fallback = "Untitled run"): string {
+  let text = request.replace(/\s+/g, " ").trim();
+  for (let before = ""; before !== text; ) { before = text; text = text.replace(FILLER, ""); }
+  text = (text.split(/(?<=[.!?])\s/)[0] ?? text).replace(/[.!?:;,\s]+$/, "");
+  if (text.length > TITLE_CHARS) {
+    const cut = text.slice(0, TITLE_CHARS);
+    let words = cut.slice(0, Math.max(cut.lastIndexOf(" "), TITLE_CHARS / 2)).replace(/[,;:\s]+$/, "");
+    while (DANGLING.test(words)) words = words.replace(DANGLING, "").replace(/[,;:\s]+$/, ""); // never end on "with an"
+    text = `${words}…`;
+  }
+  return text ? text.charAt(0).toUpperCase() + text.slice(1) : fallback;
 }

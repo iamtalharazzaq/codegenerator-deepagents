@@ -1,61 +1,158 @@
 @import "tailwindcss";
 
-/* Design tokens. Dark theme only. Every text/background pair below is checked for WCAG AA (4.5:1) by
-   src/a11y.test.ts, which reads this file, so a colour change that breaks contrast fails the build.
-   Spacing is Tailwind's 4px scale (1 = 4px): 1, 2, 3, 4, 6, 8 are the steps the layout uses. */
-@theme {
-  --font-sans: "Schibsted Grotesk", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
-  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+/* ---------------------------------------------------------------------------------------------------------------
+   Design tokens. Two themes: dark (default, on :root) and light ([data-theme="light"]). Every colour is a raw hex
+   variable (--page, --fg, --passed ...) so src/a11y.test.ts can read this file and check WCAG AA for BOTH themes.
+   Tailwind utilities (bg-surface, text-fg-2, border-hairline ...) are mapped below with `@theme inline`.
+   Spacing is the 4px Tailwind scale; the layout only uses the 8px steps (2, 4, 6, 8, 12) plus 1/3 for tight gaps.
+   --------------------------------------------------------------------------------------------------------------- */
+:root {
+  color-scheme: dark;
 
-  /* surfaces, lightest to darkest elevation: raised > surface > page */
-  --color-page: #0a0f14;
-  --color-surface: #111922;
-  --color-raised: #18232e;
-  --color-line: #354655; /* decorative dividers */
-  --color-control: #5b7084; /* borders of inputs and buttons: 3:1 or better against every surface (WCAG 1.4.11) */
+  /* layered surfaces: page < surface < raised < overlay */
+  --page: #0a0c11;
+  --surface: #10131a;
+  --raised: #161a23;
+  --overlay: #1d222d;
+  --line: #2a3140; /* decorative dividers */
+  --control: #6b7790; /* borders of inputs and buttons: 3:1 or better on every surface (WCAG 1.4.11) */
+  --hairline: rgb(255 255 255 / 0.08);
+  --highlight: rgb(255 255 255 / 0.05); /* the soft inner top edge of a surface */
+  --shadow: 0 1px 2px rgb(0 0 0 / 0.4), 0 8px 24px -8px rgb(0 0 0 / 0.5);
+  --shadow-pop: 0 12px 40px -8px rgb(0 0 0 / 0.65);
 
   /* text */
-  --color-fg: #eaf0f4;
-  --color-fg-2: #b9c6d1;
-  --color-fg-3: #98a9b8;
+  --fg: #eef1f7;
+  --fg-2: #b6bfd0;
+  --fg-3: #8f9ab0;
 
-  /* interactive */
-  --color-accent: #7cc8f2;
-  --color-accent-bg: #1c6a96;
-  --color-on-accent: #ffffff;
+  /* the signature accent: indigo to cyan. --accent is for text and focus rings, --accent-from/to fill primary buttons */
+  --accent: #a3b2ff;
+  --accent-from: #4f46e5;
+  --accent-to: #0e7490;
+  --on-accent: #ffffff;
+  --glow: rgb(99 102 241 / 0.16);
 
   /* one status system: colour + icon + label, never colour alone */
-  --color-passed: #62e6a0;
-  --color-passed-bg: #0f2c1e;
-  --color-running: #82bdff;
-  --color-running-bg: #11253d;
-  --color-queued: #b9c6d1;
-  --color-queued-bg: #1c2733;
-  --color-blocked: #ffcb5c;
-  --color-blocked-bg: #31260a;
-  --color-failed: #ffa662;
-  --color-failed-bg: #33210d;
-  --color-escalated: #ff8f8a;
-  --color-escalated-bg: #371717;
-  --color-idle: #a3b3c0;
-  --color-idle-bg: #18222c;
+  --passed: #4ade9b;
+  --passed-bg: #0f2c20;
+  --running: #7db4ff;
+  --running-bg: #11243f;
+  --queued: #aeb7c9;
+  --queued-bg: #1b212d;
+  --blocked: #f5c451;
+  --blocked-bg: #2f2509;
+  --failed: #ffa05c;
+  --failed-bg: #34200e;
+  --escalated: #ff8d8d;
+  --escalated-bg: #3b1619;
+  --idle: #9ba5ba;
+  --idle-bg: #171c26;
+
+  /* agent tint: lightness and saturation of an agent's hue (the hue itself is set per agent) */
+  --agent-s: 90%;
+  --agent-l: 72%;
+  --agent-bg-a: 0.16;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --page: #f4f5fa;
+  --surface: #ffffff;
+  --raised: #f0f2f8;
+  --overlay: #ffffff;
+  --line: #dde1ec;
+  --control: #6f7a91;
+  --hairline: rgb(15 23 42 / 0.1);
+  --highlight: rgb(255 255 255 / 0.9);
+  --shadow: 0 1px 2px rgb(15 23 42 / 0.06), 0 8px 24px -12px rgb(15 23 42 / 0.16);
+  --shadow-pop: 0 12px 40px -8px rgb(15 23 42 / 0.28);
+
+  --fg: #11141c;
+  --fg-2: #394156;
+  --fg-3: #566075;
+
+  --accent: #4338ca;
+  --accent-from: #4338ca;
+  --accent-to: #0e7490;
+  --on-accent: #ffffff;
+  --glow: rgb(99 102 241 / 0.12);
+
+  --passed: #0a7a45;
+  --passed-bg: #dcf5e7;
+  --running: #1b5cc9;
+  --running-bg: #e0ebff;
+  --queued: #4a5468;
+  --queued-bg: #e8ebf3;
+  --blocked: #7f5300;
+  --blocked-bg: #fdefc9;
+  --failed: #a04500;
+  --failed-bg: #fde4d0;
+  --escalated: #b0222b;
+  --escalated-bg: #fde0e0;
+  --idle: #566075;
+  --idle-bg: #eceff5;
+
+  --agent-s: 72%;
+  --agent-l: 36%;
+  --agent-bg-a: 0.14;
+}
+
+@theme inline {
+  --font-sans: "Inter", ui-sans-serif, system-ui, "Segoe UI", Roboto, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+
+  --color-page: var(--page);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-overlay: var(--overlay);
+  --color-line: var(--line);
+  --color-control: var(--control);
+  --color-hairline: var(--hairline);
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-3: var(--fg-3);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+
+  --color-passed: var(--passed);
+  --color-passed-bg: var(--passed-bg);
+  --color-running: var(--running);
+  --color-running-bg: var(--running-bg);
+  --color-queued: var(--queued);
+  --color-queued-bg: var(--queued-bg);
+  --color-blocked: var(--blocked);
+  --color-blocked-bg: var(--blocked-bg);
+  --color-failed: var(--failed);
+  --color-failed-bg: var(--failed-bg);
+  --color-escalated: var(--escalated);
+  --color-escalated-bg: var(--escalated-bg);
+  --color-idle: var(--idle);
+  --color-idle-bg: var(--idle-bg);
+
+  --radius-card: 16px;
+  --radius-control: 12px;
+  --shadow-card: var(--shadow);
+  --shadow-pop: var(--shadow-pop);
 }
 
 @layer base {
   html {
-    color-scheme: dark;
+    -webkit-text-size-adjust: 100%;
   }
   body {
     margin: 0;
-    background: var(--color-page);
-    color: var(--color-fg);
-    font: 400 14px/1.5 var(--font-sans);
+    background: var(--page);
+    color: var(--fg);
+    font: 400 14px/1.55 var(--font-sans);
+    font-feature-settings: "cv11", "ss01";
     -webkit-font-smoothing: antialiased;
   }
   :focus-visible {
-    outline: 2px solid var(--color-accent);
+    outline: 2px solid var(--accent);
     outline-offset: 2px;
-    border-radius: 4px;
+    border-radius: 8px;
   }
   button {
     cursor: pointer;
@@ -63,25 +160,120 @@
   button:disabled {
     cursor: not-allowed;
   }
-  summary {
-    cursor: pointer;
-  }
   ::selection {
-    background: var(--color-accent-bg);
-    color: var(--color-on-accent);
+    background: var(--accent-from);
+    color: var(--on-accent);
+  }
+  /* Panes scroll on their own; the scrollbars stay thin and quiet. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--line) transparent;
   }
 }
 
-@keyframes spin-slow {
-  to { transform: rotate(360deg); }
+@layer components {
+  /* Layered surfaces with a 1px hairline and a soft inner highlight instead of a heavy outline. */
+  .surface,
+  .raised,
+  .overlay {
+    border: 1px solid var(--hairline);
+    border-radius: var(--radius-card);
+    box-shadow: inset 0 1px 0 var(--highlight), var(--shadow);
+  }
+  .surface { background: var(--surface); }
+  .raised { background: var(--raised); }
+  .overlay { background: var(--overlay); box-shadow: inset 0 1px 0 var(--highlight), var(--shadow-pop); }
+
+  /* The page atmosphere: a faint glow behind the header and a barely visible grid. */
+  .atmos {
+    background:
+      radial-gradient(900px 360px at 50% -80px, var(--glow), transparent 70%),
+      linear-gradient(var(--hairline) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, var(--hairline) 1px, transparent 1px) 0 0 / 40px 40px,
+      var(--page);
+    background-blend-mode: normal, soft-light, soft-light, normal;
+  }
+  :root[data-theme="light"] .atmos {
+    background-blend-mode: normal, normal, normal, normal;
+    background:
+      radial-gradient(900px 360px at 50% -80px, var(--glow), transparent 70%),
+      linear-gradient(rgb(15 23 42 / 0.035) 1px, transparent 1px) 0 0 / 40px 40px,
+      linear-gradient(90deg, rgb(15 23 42 / 0.035) 1px, transparent 1px) 0 0 / 40px 40px,
+      var(--page);
+  }
+
+  .glass {
+    background: color-mix(in srgb, var(--surface) 78%, transparent);
+    backdrop-filter: blur(14px) saturate(1.4);
+    -webkit-backdrop-filter: blur(14px) saturate(1.4);
+  }
+
+  .btn-primary {
+    background-image: linear-gradient(135deg, var(--accent-from), var(--accent-to));
+    color: var(--on-accent);
+    box-shadow: inset 0 1px 0 rgb(255 255 255 / 0.22), 0 4px 14px -4px var(--accent-from);
+  }
+  .btn-primary:hover:not(:disabled) { filter: brightness(1.12); }
+  .btn-primary:disabled { filter: saturate(0.4); opacity: 0.55; box-shadow: none; }
+
+  .text-gradient {
+    background-image: linear-gradient(135deg, var(--accent), var(--running));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+
+  /* An agent's avatar: a tinted rounded square in the agent's own hue. --agent-h is set inline. */
+  .agent-tint {
+    background: hsl(var(--agent-h) 85% 55% / var(--agent-bg-a));
+    color: hsl(var(--agent-h) var(--agent-s) var(--agent-l));
+    box-shadow: inset 0 0 0 1px hsl(var(--agent-h) 85% 55% / 0.28);
+  }
+  .agent-text { color: hsl(var(--agent-h) var(--agent-s) var(--agent-l)); }
+
+  /* Rendered markdown (the result and the full report). */
+  .md { font-size: 15px; line-height: 1.65; color: var(--fg); overflow-wrap: anywhere; }
+  .md > * + * { margin-top: 0.75em; }
+  .md h2 { font-size: 1.25em; font-weight: 650; letter-spacing: -0.01em; margin-top: 1.1em; }
+  .md h3 { font-size: 1.05em; font-weight: 650; margin-top: 1em; color: var(--fg); }
+  .md h4 { font-size: 0.95em; font-weight: 650; color: var(--fg-2); }
+  .md > :first-child { margin-top: 0; }
+  .md p { color: var(--fg-2); }
+  .md strong { color: var(--fg); font-weight: 650; }
+  .md ul, .md ol { padding-left: 1.25em; color: var(--fg-2); }
+  .md ul { list-style: none; }
+  .md ul > li { position: relative; }
+  .md ul > li::before { content: ""; position: absolute; left: -1em; top: 0.7em; width: 5px; height: 5px; border-radius: 9999px; background: var(--accent); }
+  .md ol { list-style: decimal; }
+  .md ol > li::marker { color: var(--accent); font-weight: 600; }
+  .md li + li { margin-top: 0.3em; }
+  .md code { font-family: var(--font-mono); font-size: 0.86em; padding: 0.12em 0.4em; border-radius: 6px; background: var(--raised); border: 1px solid var(--hairline); color: var(--fg); }
+  .md pre { font-family: var(--font-mono); font-size: 13px; line-height: 1.6; padding: 12px 14px; border-radius: 12px; background: var(--page); border: 1px solid var(--hairline); color: var(--fg-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+  .md pre code { padding: 0; border: 0; background: none; font-size: inherit; }
+  .md a { color: var(--accent); text-decoration: underline; text-underline-offset: 3px; }
+  .md .table-wrap { border: 1px solid var(--hairline); border-radius: 12px; overflow: hidden; }
+  .md table { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+  .md th { text-align: left; font-weight: 600; color: var(--fg-2); background: var(--raised); }
+  .md th, .md td { padding: 8px 12px; border-bottom: 1px solid var(--hairline); vertical-align: top; overflow-wrap: anywhere; }
+  .md tr:last-child td { border-bottom: 0; }
 }
-@keyframes march {
-  to { stroke-dashoffset: -24; }
-}
-.spin { animation: spin-slow 1.2s linear infinite; transform-origin: 50% 50%; }
-.march { stroke-dasharray: 6 6; animation: march 1s linear infinite; }
+
+/* ------------------------------------------------------------------------------------------------ motion
+   Rules: motion explains state (something is running, something changed). Durations 150-300ms, ease-out, nothing loops
+   except "running" signals (spinner, pulse dot, flowing edge, progress shimmer). All of it stops under reduced motion. */
+@keyframes spin-slow { to { transform: rotate(360deg); } }
+@keyframes flow { to { stroke-dashoffset: -24; } }
+@keyframes shimmer { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+@keyframes ping-soft { 0% { transform: scale(1); opacity: 0.6; } 80%, 100% { transform: scale(2.4); opacity: 0; } }
+@keyframes border-glow { 0%, 100% { opacity: 0.45; } 50% { opacity: 1; } }
+
+.spin { animation: spin-slow 1.1s linear infinite; transform-origin: 50% 50%; }
+.flow { stroke-dasharray: 5 7; animation: flow 0.9s linear infinite; }
+.shimmer::after { content: ""; position: absolute; inset: 0; background: linear-gradient(90deg, transparent, rgb(255 255 255 / 0.35), transparent); animation: shimmer 1.6s ease-in-out infinite; }
+.ping-soft { animation: ping-soft 1.6s ease-out infinite; }
+.glow-pulse { animation: border-glow 2.2s ease-in-out infinite; }
 
 @media (prefers-reduced-motion: reduce) {
-  .spin, .march { animation: none; }
-  * { scroll-behavior: auto !important; }
+  .spin, .flow, .shimmer::after, .ping-soft, .glow-pulse { animation: none; }
+  * { scroll-behavior: auto !important; transition-duration: 0.01ms !important; }
 }

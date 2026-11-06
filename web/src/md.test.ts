@@ -30,3 +30,13 @@ describe("report markdown", () => {
     expect(parseMarkdown("```\nabc")).toEqual([{ type: "code", text: "abc" }]);
   });
 });
+
+describe("report markdown, numbered lists", () => {
+  it("reads numbered lists as ordered lists and keeps bullets separate", () => {
+    const blocks = parseMarkdown(["1. Unzip", "2. Open `index.html`", "", "- a", "- b"].join("\n"));
+    expect(blocks).toEqual([
+      { type: "list", items: ["Unzip", "Open `index.html`"], ordered: true },
+      { type: "list", items: ["a", "b"] },
+    ]);
+  });
+});

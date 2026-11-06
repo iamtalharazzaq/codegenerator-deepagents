@@ -4,7 +4,7 @@
 export type Block =
   | { type: "heading"; level: number; text: string }
   | { type: "para"; text: string }
-  | { type: "list"; items: string[] }
+  | { type: "list"; items: string[]; ordered?: boolean }
   | { type: "code"; text: string }
   | { type: "table"; head: string[]; rows: string[][] };
 
@@ -34,13 +34,17 @@ export function parseMarkdown(text: string): Block[] {
       const rows: string[][] = [];
       while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(cells(lines[i++]));
       blocks.push({ type: "table", head, rows });
+    } else if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ""));
+      blocks.push({ type: "list", items, ordered: true });
     } else if (/^\s*[-*]\s+/.test(line)) {
       const items: string[] = [];
       while (i < lines.length && /^\s*[-*]\s+/.test(lines[i])) items.push(lines[i++].replace(/^\s*[-*]\s+/, ""));
       blocks.push({ type: "list", items });
     } else {
       const para: string[] = [];
-      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*[-*]\s+)/.test(lines[i]) && !lines[i].trim().startsWith("|")) para.push(lines[i++]);
+      while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*[-*]\s+|\s*\d+[.)]\s+)/.test(lines[i]) && !lines[i].trim().startsWith("|")) para.push(lines[i++]);
       if (!para.length) para.push(lines[i++]);
       blocks.push({ type: "para", text: para.join(" ") });
     }
