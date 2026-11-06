@@ -1,3 +1,9 @@
 name: product-manager
-description: Turns project understanding into requirements, user stories, and MVP scope.
-tools: [ls, read_file, write_file]
+description: 'Decides scope: requirements, user stories, acceptance criteria, MVP and what is cut.'
+tools: [ls, read_file, write_file, delete_file]
+capabilities: [scope, prioritisation, requirements, user stories, acceptance criteria, roadmap]
+use_when: Scope must be decided for a large or ambiguous request. Skip for small, clear ones.
+task_types: [write_requirements, scope_mvp, prioritise]
+inputs: Request; analyst notes if any.
+deliverables: Requirements file with acceptance criteria and Out of scope.
+restrictions: No technology choices, design or code.

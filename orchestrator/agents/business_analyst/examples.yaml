@@ -1,0 +1,7 @@
+- id: ba-notes-small-tool
+  task_types: [analyse_context]
+  tags: [notes, facts, constraints, context, brief]
+  task: "Write notes for the request 'a command-line unit converter'. WRITES: docs/notes.md"
+  good: |
+    write_file docs/notes.md containing: Goal (one sentence from the request), Users: Unknown, Existing stack and files: none (empty project), Constraints: none stated, Open questions: "Which units?", "Interactive prompt or arguments?". Under 20 lines. Then reply "Wrote docs/notes.md; open questions: units, interface." No requirements, no advice.
+  avoid: "Writing user stories or choosing the language: that is not a fact."

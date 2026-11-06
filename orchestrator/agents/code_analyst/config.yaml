@@ -1,3 +1,9 @@
 name: code-analyst
-description: Builds the code graph, finds hotspots, and reviews code quality as a gate (absorbs Tech Lead's review duties).
+description: Maps the existing code, finds hotspots and reviews code quality.
 tools: [ls, read_file, grep, write_file]
+capabilities: [code analysis, repository investigation, impact analysis, code map]
+use_when: Existing code must be understood or a change reviewed against its goal.
+task_types: [map_codebase, review_change, impact_analysis]
+inputs: Files or whole project; requirement for a review.
+deliverables: Analysis or review file with file:line findings.
+restrictions: Writes no code; not a security audit.

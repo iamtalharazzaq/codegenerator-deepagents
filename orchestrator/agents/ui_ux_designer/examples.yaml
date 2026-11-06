@@ -1,0 +1,7 @@
+- id: designer-one-screen
+  task_types: [design_screens]
+  tags: [screen, design, ui, layout, states]
+  task: "Design the screen for a to-do list. Requirements: docs/requirements.md. WRITES: docs/design.md"
+  good: |
+    write_file docs/design.md containing: Screen "Tasks": top to bottom: title, input with label "New task", button "Add", list. States: empty "No tasks yet", error "Task cannot be empty", success: item appears at the top. Rules: 4.5:1 text contrast, visible focus ring, works at 360px width. Under 30 lines.
+  avoid: "Extra screens, themes or settings pages."

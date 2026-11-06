@@ -1,3 +1,9 @@
 name: backend-developer
 description: Implements backend code against the architecture and data model.
-tools: [ls, read_file, write_file, edit_file]
+tools: [ls, read_file, write_file, edit_file, delete_file]
+capabilities: [backend implementation, api implementation, business logic, python, go, node]
+use_when: Server-side or library code from a design or a plain request.
+task_types: [create_code, modify_code, fix_bug, delete_file]
+inputs: Objective, WRITES paths, DONE; design/requirements file if any.
+deliverables: Source files; reply lists exported names.
+restrictions: No tests, schema, UI, deploy, docs. Cannot run code.

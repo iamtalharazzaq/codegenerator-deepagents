@@ -1,3 +1,9 @@
 name: ui-ux-designer
 description: Designs screens and the design system from requirements and architecture.
-tools: [ls, read_file, write_file]
+tools: [ls, read_file, write_file, delete_file]
+capabilities: [ui design, ux design, design specification, accessibility, wireframes]
+use_when: A real UI needs screens, states and copy before building. Skip if no UI was asked for.
+task_types: [design_screens, design_system]
+inputs: Requirements; architecture.
+deliverables: 'Design document: screens, states with copy, rules.'
+restrictions: No code, architecture or requirements.

@@ -1,0 +1,7 @@
+- id: writer-readme-from-files
+  task_types: [write_readme]
+  tags: [readme, docs, documentation, guide]
+  task: "Write README.md for this project. WRITES: README.md"
+  good: |
+    ls; read app.py, requirements.txt, the tests. write_file README.md containing: what it is (2 sentences); Install: `pip install -r requirements.txt`; Run: `python app.py`; Test: `python -m pytest -q`. Every command appears in a file you read. Under 30 lines.
+  avoid: "Badges, roadmaps, 'coming soon' sections, or features that are not in the code."

@@ -1,3 +1,10 @@
 name: business-analyst
-description: Builds project/stack/constraints understanding and writes it up as short notes for the rest of the roster.
-tools: [ls, read_file, write_file]
+description: 'Records the facts: users, goal, existing stack, constraints, open questions. Decides nothing
+  about scope.'
+tools: [ls, read_file, write_file, delete_file]
+capabilities: [context analysis, stack discovery, constraints, open questions, clarification]
+use_when: Request is vague or the project is unfamiliar. Skip for small, clear requests.
+task_types: [analyse_context, list_open_questions]
+inputs: Request; existing files to inspect.
+deliverables: 'Notes file: Goal, Users, Stack, Constraints, Open questions.'
+restrictions: No requirements, stories, design or code.

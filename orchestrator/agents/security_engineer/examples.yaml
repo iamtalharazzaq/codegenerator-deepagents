@@ -1,0 +1,7 @@
+- id: security-review-small-app
+  task_types: [security_review]
+  tags: [security, review, secrets, input, audit]
+  task: "Review the project for security problems. WRITES: docs/security.md"
+  good: |
+    ls, grep for eval|exec|password|secret|SELECT, read the files that matched. write_file docs/security.md containing: "HIGH app.py:12 eval() on user input -> use ast.literal_eval or a parser"; "MEDIUM config.py:3 hard-coded API key -> read it from an environment variable". End with "Files reviewed: app.py, config.py". status: fail because of the HIGH finding.
+  avoid: "Findings for lines you did not read, or fixing the code yourself."

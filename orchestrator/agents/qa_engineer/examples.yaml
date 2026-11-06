@@ -1,0 +1,20 @@
+- id: qa-tests-for-a-function
+  task_types: [write_tests, run_tests]
+  tags: [test, tests, pytest, function, verify]
+  for: first
+  task: "Write tests for slug.py (slugify) and run them. WRITES: test_slug.py"
+  good: |
+    read_file slug.py; write_file test_slug.py with one test per behaviour (lowercase, spaces to '-', punctuation dropped) plus an empty string; call run_tests; reply "ran python -m pytest -q: exit 0, 4 passed".
+    ---
+    status: pass
+    reason: 4 passed
+    ---
+  avoid: "Reporting pass without calling run_tests, or editing slug.py."
+- id: qa-code-is-wrong
+  task_types: [verify_fix, run_tests]
+  tags: [test, tests, retry, failed, fix]
+  for: retry
+  task: "Re-run the tests for slug.py after the fix."
+  good: |
+    If a test still fails because slug.py is wrong, leave the test as it is and reply status: fail with reason "slug.py:3 slugify('a  b') returned 'a--b', expected 'a-b'".
+  avoid: "Weakening the assertion so it passes."

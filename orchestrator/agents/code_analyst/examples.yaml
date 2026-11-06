@@ -1,0 +1,7 @@
+- id: code-review-against-requirement
+  task_types: [review_change]
+  tags: [review, requirement, quality, correctness]
+  task: "Review slug.py against docs/requirements.md. WRITES: docs/review.md"
+  good: |
+    Read both files, then write_file docs/review.md containing: Blocking: "slug.py:5 never lowercases, requirement 1 not met". Non-blocking: "slug.py:9 unused import". status: fail because of the blocking finding; reason names it.
+  avoid: "Passing a review you doubt, or listing style preferences as blocking."

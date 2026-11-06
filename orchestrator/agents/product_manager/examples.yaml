@@ -1,0 +1,7 @@
+- id: product-requirements-small-tool
+  task_types: [write_requirements]
+  tags: [requirements, scope, mvp, stories]
+  task: "Write requirements for 'a command-line unit converter'. Notes: docs/notes.md. WRITES: docs/requirements.md"
+  good: |
+    write_file docs/requirements.md containing: Goal: convert a number between units. Must have: 1 converts km to miles (criterion: 10 km -> 6.21 mi); 2 converts C to F; 3 rejects unknown units with a message. Out of scope: GUI, currency, history. Under 20 lines in all. Then reply "Wrote docs/requirements.md: 3 requirements."
+  avoid: "Ten stories, a roadmap, or a technology choice for a request this small."

@@ -1,3 +1,9 @@
 name: devops-engineer
-description: Handles deploy, CI/CD, infra, release/cutover, and security (secrets/deps/auth); absorbs Security Engineer and Release Manager.
-tools: [ls, read_file, write_file, edit_file, run_build]
+description: Handles build, deploy, CI/CD, infra and release/cutover.
+tools: [ls, read_file, write_file, edit_file, run_build, delete_file]
+capabilities: [build, ci/cd, docker, deployment, infrastructure, release]
+use_when: A Dockerfile, CI pipeline, Makefile or build check was asked for.
+task_types: [write_build_config, verify_build, release]
+inputs: Project files; architecture; DONE.
+deliverables: Build/pipeline files; real build exit code.
+restrictions: No application code or tests. Needs the sandbox to run builds.

@@ -1,3 +1,6 @@
 name: project-manager
-description: Main agent. Reads the request, keeps a to-do list, delegates to the specialists with the task tool, reads their results, retries or changes approach on failure, and ends with a final status block.
-tools: [ls, read_file, write_todos, task]
+description: Main agent. Reads the request, keeps a to-do list, delegates to the specialists with the
+  task tool, reads their results, retries or changes approach on failure, and ends with a final status
+  block.
+tools: [ls, read_file, write_todos, task, get_agent_capabilities]
+capabilities: [planning, delegation, replanning]

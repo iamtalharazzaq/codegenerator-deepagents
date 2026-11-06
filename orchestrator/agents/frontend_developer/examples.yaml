@@ -1,0 +1,11 @@
+- id: frontend-single-page
+  task_types: [create_ui]
+  tags: [page, html, button, form, screen]
+  task: "Create index.html with a text box, an Add button and a list of items. WRITES: index.html"
+  good: |
+    One file: a <label> for the text box, a <button type="button">, a <ul> that shows "No items yet" when empty. Inline <style> and <script>, no libraries. Reply names the three elements.
+    ---
+    status: pass
+    reason: index.html has input, button and list
+    ---
+  avoid: "Frameworks, build steps or a backend call the task did not mention."

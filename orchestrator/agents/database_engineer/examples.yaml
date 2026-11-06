@@ -1,0 +1,7 @@
+- id: database-two-tables
+  task_types: [design_schema]
+  tags: [schema, table, migration, sql, database]
+  task: "Design the schema for notes that belong to users. WRITES: db/migrations/001_init.sql"
+  good: |
+    write_file db/migrations/001_init.sql containing: `-- up` creates users(id PK, email UNIQUE NOT NULL) and notes(id PK, user_id FK -> users ON DELETE CASCADE, body NOT NULL); `-- down` drops notes then users. One index on notes(user_id). Reply lists both tables.
+  avoid: "Tables for features the design does not mention, or a migration with no down."

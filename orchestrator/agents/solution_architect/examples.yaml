@@ -1,0 +1,7 @@
+- id: architect-single-file-tool
+  task_types: [design_architecture]
+  tags: [design, architecture, parts, tool]
+  task: "Design a command-line unit converter. Requirements: docs/requirements.md. WRITES: docs/architecture.md"
+  good: |
+    write_file docs/architecture.md containing: Overview (2 sentences); Main parts: ONE module `convert.py` (parses arguments, converts, prints); Data: a table of unit factors; Interfaces: `convert <value> <from> <to>`; Stack: Python standard library only; Risks: 3 bullets. No services, no database, no layers.
+  avoid: "Splitting a one-file tool into controller, service and repository."

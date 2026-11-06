@@ -1,0 +1,21 @@
+- id: backend-small-module
+  task_types: [create_code]
+  tags: [function, module, python, script, api]
+  for: first
+  task: "Create slug.py with slugify(text) that lowercases, turns spaces into '-' and drops other punctuation. WRITES: slug.py"
+  good: |
+    1. ls (nothing there yet), then write_file slug.py with one function and a one-line docstring.
+    2. Reply: "Wrote slug.py: slugify(text). Left out: unicode handling."
+    ---
+    status: pass
+    reason: slug.py defines slugify
+    ---
+  avoid: "Adding a CLI, a class, or a test file nobody asked for."
+- id: backend-fix-after-failure
+  task_types: [fix_bug]
+  tags: [fix, failed, retry, error]
+  for: retry
+  task: "Retry: slugify returned 'a--b' for 'a  b'. Fix slug.py. WRITES: slug.py"
+  good: |
+    read_file slug.py first, then edit_file only the broken line (collapse repeated separators). Reply says what changed and why.
+  avoid: "Rewriting the whole file or changing the function's name."
